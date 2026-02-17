@@ -32,9 +32,9 @@ NUM_PEOPLE = 2
 # Each entry is (friday_date_str, saturday_date_str).
 # Priority order: bot tries these in order and stops at the first one added to cart.
 TARGET_WEEKENDS = [
-    ("2026-06-05", "2026-06-06"),   # Weekend 1
-    ("2026-06-12", "2026-06-13"),   # Weekend 2
     ("2026-06-26", "2026-06-27"),   # Weekend 3 (June 19-20 is excluded)
+    ("2026-06-12", "2026-06-13"),   # Weekend 2
+    ("2026-06-05", "2026-06-06"),   # Weekend 1
 ]
 
 # Campground preference options per weekend, tried in priority order.
