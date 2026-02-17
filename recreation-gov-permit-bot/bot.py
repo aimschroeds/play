@@ -11,7 +11,7 @@ See config.py for all settings and the Chrome launch instructions.
 import asyncio
 import random
 import sys
-from datetime import datetime, date, timedelta
+from datetime import datetime, timedelta
 
 import pytz
 from playwright.async_api import async_playwright, Page, BrowserContext
@@ -113,43 +113,64 @@ async def wait_until_launch_window(page: Page) -> None:
 
 
 # ── Core permit flow ───────────────────────────────────────────────────────────
+# The PERMIT_URL goes directly to the detailed-availability grid for June 2026.
+# The grid has campground rows × date columns.  We:
+#   1. Reload the page fresh for each attempt.
+#   2. Find the column index for the target date.
+#   3. Within the target campground row, click the cell at that column index.
+#   4. Handle any "Add to Cart" modal/button that appears.
+#   5. Set group size if prompted.
 
-async def select_date(page: Page, date_str: str) -> bool:
+
+async def find_date_column_index(page: Page, date_str: str) -> int | None:
     """
-    Click the calendar cell for the given date (YYYY-MM-DD).
-    Returns True on success.
+    Locate the 1-based column index in the availability grid that corresponds
+    to `date_str` (YYYY-MM-DD).  Returns None if not found.
 
-    NOTE: Update this function after recording the actual click path on
-    recreation.gov.  The aria-label format may differ.
+    NOTE: The column headers on recreation.gov typically carry either a
+    data-date attribute or an aria-label containing the date.  Update the
+    selector template in config.py if the real markup differs.
     """
     dt = datetime.strptime(date_str, "%Y-%m-%d")
-    # recreation.gov aria-labels look like "June 5, 2026"
-    aria_label = dt.strftime("%B %-d, %Y")   # e.g. "June 5, 2026"
-    selector = SELECTORS["date_cell_template"].format(month_day_year=aria_label)
+    month_day = dt.strftime("%B %-d")   # e.g. "June 26"
 
-    log(f"  Selecting date: {aria_label}")
+    selector = SELECTORS["date_column_header_template"].format(
+        month_day=month_day,
+        date=date_str,
+    )
+    log(f"  Finding column for {month_day} …")
     try:
-        cell = page.locator(selector).first
-        await cell.wait_for(state="visible", timeout=5000)
-        await human_click(page, cell)
-        await human_delay()
-        return True
+        # Get all matching header cells and find their column position
+        headers = await page.locator(selector).all()
+        if not headers:
+            log(f"  No column header found for {month_day}")
+            return None
+
+        # Use the first matching header; get its index among all <th>/<td> siblings
+        header = headers[0]
+        # JavaScript: count preceding siblings to get 1-based column index
+        col_index = await header.evaluate(
+            "el => Array.from(el.parentElement.children).indexOf(el) + 1"
+        )
+        log(f"  Column for {month_day}: {col_index}")
+        return col_index
     except Exception as e:
-        log(f"  Could not find date cell for {aria_label}: {e}")
-        return False
+        log(f"  Error finding column for {month_day}: {e}")
+        return None
 
 
 async def set_num_people(page: Page, n: int) -> None:
     """
     Set the group-size / number-of-people field to n.
+    This field often appears in a modal after clicking a grid cell.
 
-    NOTE: Update selectors in config.py to match the actual input element.
+    NOTE: Update the selector in config.py to match the actual input element.
     """
     log(f"  Setting group size to {n}")
     try:
         field = page.locator(SELECTORS["people_input"]).first
         await field.wait_for(state="visible", timeout=5000)
-        await field.triple_click()            # select all existing text
+        await field.triple_click()
         await asyncio.sleep(random.uniform(0.1, 0.2))
         await field.type(str(n), delay=random.randint(60, 140))
         await human_delay()
@@ -157,26 +178,36 @@ async def set_num_people(page: Page, n: int) -> None:
         log(f"  Warning: could not set group size: {e}")
 
 
-async def find_and_add_quota(
+async def add_night_to_cart(
     page: Page,
     night_label: str,
+    date_str: str,
     campground_pref: str,
 ) -> bool:
     """
-    On the availability grid for `night_label` (e.g. "Night 1 – June 5"),
-    find a non-group site matching `campground_pref` and click Add to Cart.
-    Returns True if a site was successfully added.
+    In the availability grid, find the cell at (campground_pref row, date_str col)
+    and click it to add that night to the cart.  Returns True on success.
 
-    NOTE: This is the section most likely to need adjustment after recording
-    the actual click path.  The quota row structure varies by permit type.
+    NOTE: This is the section most likely to need adjustment after you record
+    the actual click path.  Key unknowns:
+      - Whether clicking the cell opens a modal (then you click "Add to Cart"
+        inside the modal) or directly adds to cart.
+      - Whether the group-size prompt appears before or after the add-to-cart action.
     """
-    log(f"  Looking for '{campground_pref}' quota on {night_label} …")
+    log(f"  [{night_label}] Looking for '{campground_pref}' on {date_str} …")
 
     for attempt in range(MAX_QUOTA_RETRIES):
+        # Refresh column index each retry in case the grid re-rendered
+        col_index = await find_date_column_index(page, date_str)
+        if col_index is None:
+            log(f"    Date column not found yet, retry {attempt+1} …")
+            await asyncio.sleep(DELAY_BEFORE_RETRY)
+            continue
+
         rows = await page.locator(SELECTORS["quota_row"]).all()
+        matched_row = None
 
         for row in rows:
-            # Get campground name text
             try:
                 name_el = row.locator(SELECTORS["quota_name"]).first
                 name = (await name_el.inner_text()).strip()
@@ -188,33 +219,56 @@ async def find_and_add_quota(
             if campground_pref.lower() not in name.lower():
                 continue
 
-            # Found a matching, non-group row — try to click Add to Cart
-            try:
-                btn = row.locator(SELECTORS["add_to_cart_button"]).first
-                is_visible = await btn.is_visible()
-                is_disabled = await btn.is_disabled()
-                if not is_visible or is_disabled:
-                    log(f"    '{name}' found but button not available yet")
-                    break   # break inner, retry outer
-                log(f"    Adding to cart: {name}")
-                await human_click(page, btn)
-                await human_delay(DELAY_AFTER_NAVIGATION)
-                # Confirm cart addition
-                try:
-                    await page.locator(SELECTORS["cart_confirmation"]).first.wait_for(
-                        state="visible", timeout=6000
-                    )
-                    log(f"    ✓ Added '{name}' to cart for {night_label}")
-                    return True
-                except Exception:
-                    log(f"    Cart confirmation not seen — may still have worked")
-                    return True   # optimistic: proceed
-            except Exception as e:
-                log(f"    Error clicking Add to Cart for '{name}': {e}")
+            matched_row = (row, name)
+            break
 
-        if attempt < MAX_QUOTA_RETRIES - 1:
-            log(f"    Quota not yet available, retry {attempt+1}/{MAX_QUOTA_RETRIES} …")
+        if matched_row is None:
+            log(f"    No matching row for '{campground_pref}', retry {attempt+1} …")
             await asyncio.sleep(DELAY_BEFORE_RETRY)
+            continue
+
+        row, name = matched_row
+        cell_selector = SELECTORS["date_cell_in_row_template"].format(col_index=col_index)
+
+        try:
+            cell = row.locator(cell_selector).first
+            is_visible = await cell.is_visible()
+            if not is_visible:
+                log(f"    Cell not visible yet, retry {attempt+1} …")
+                await asyncio.sleep(DELAY_BEFORE_RETRY)
+                continue
+
+            log(f"    Clicking cell: {name} × {date_str}")
+            await human_click(page, cell)
+            await human_delay(DELAY_AFTER_NAVIGATION)
+
+            # After clicking, a modal or panel may appear with "Add to Cart"
+            # and/or a people-count field.  Handle both orderings.
+            await set_num_people(page, NUM_PEOPLE)
+
+            try:
+                add_btn = page.locator(SELECTORS["add_to_cart_button"]).first
+                if await add_btn.is_visible():
+                    await human_click(page, add_btn)
+                    await human_delay(DELAY_AFTER_NAVIGATION)
+            except Exception:
+                pass  # Cell click may have already added to cart directly
+
+            # Confirm
+            try:
+                await page.locator(SELECTORS["cart_confirmation"]).first.wait_for(
+                    state="visible", timeout=6000
+                )
+                log(f"    ✓ Added '{name}' to cart for {night_label}")
+                return True
+            except Exception:
+                log(f"    Cart confirmation not seen — treating as success")
+                return True
+
+        except Exception as e:
+            log(f"    Error interacting with cell: {e}")
+
+        await asyncio.sleep(DELAY_BEFORE_RETRY)
 
     log(f"  ✗ Could not add '{campground_pref}' for {night_label}")
     return False
@@ -228,65 +282,32 @@ async def try_weekend(
 ) -> bool:
     """
     Attempt to book a two-night permit (Friday + Saturday) with the given
-    campground preference list.  Returns True if both nights were added.
+    campground preference list.  Navigates directly to the detailed-availability
+    grid (no landing page or "Book Now" needed).  Returns True if both nights
+    were added to cart.
     """
     night1_camp, night2_camp = campground_option
     log(f"Trying weekend {friday} / {saturday}  [{night1_camp} → {night2_camp}]")
 
-    # Reload the permit page to get a fresh booking form
+    # Navigate to the availability grid fresh for each attempt
     await page.goto(PERMIT_URL, wait_until="domcontentloaded")
     await human_delay(DELAY_AFTER_NAVIGATION)
 
-    # Click "Book Now" to open the booking flow
+    # Wait for the grid to render
     try:
-        book_btn = page.locator(SELECTORS["book_now_button"]).first
-        await book_btn.wait_for(state="visible", timeout=8000)
-        await human_click(page, book_btn)
-        await human_delay(DELAY_AFTER_NAVIGATION)
-    except Exception as e:
-        log(f"  Could not click Book Now: {e}")
-        return False
-
-    # Select the entry date (Friday)
-    if not await select_date(page, friday):
-        return False
-
-    # Select the exit date (Sunday = Friday + 2 days) or number-of-nights = 2
-    # recreation.gov may show a calendar for exit date or a nights selector.
-    # Try selecting Saturday first (end of 2-night stay), then Sunday.
-    # Adjust this section based on your recorded click path.
-    sunday = (datetime.strptime(saturday, "%Y-%m-%d") + timedelta(days=1)).strftime("%Y-%m-%d")
-    exit_selected = await select_date(page, sunday)
-    if not exit_selected:
-        # Fallback: maybe the site uses number-of-nights instead of exit date
-        log("  Exit date click failed; trying to set nights = 2 via input")
-        try:
-            nights_field = page.locator('[aria-label*="nights"], [name*="nights"]').first
-            await nights_field.triple_click()
-            await nights_field.type("2", delay=random.randint(60, 140))
-        except Exception:
-            log("  Warning: could not set number of nights")
-
-    await human_delay()
-
-    # Set group size
-    await set_num_people(page, NUM_PEOPLE)
-
-    # Submit the search / availability check
-    try:
-        search_btn = page.locator('text=Search, text=Check Availability, [type="submit"]').first
-        if await search_btn.is_visible():
-            await human_click(page, search_btn)
-            await human_delay(DELAY_AFTER_NAVIGATION)
+        await page.locator(SELECTORS["availability_grid"]).first.wait_for(
+            state="visible", timeout=10000
+        )
     except Exception:
-        pass  # Not all flows have an explicit Search button
+        log("  Availability grid did not appear — page may still be loading")
 
-    # Handle each night's quota selection
-    night1_ok = await find_and_add_quota(page, f"Night 1 – {friday}", night1_camp)
+    # Night 1: Friday
+    night1_ok = await add_night_to_cart(page, f"Night 1 ({friday})", friday, night1_camp)
     if not night1_ok:
         return False
 
-    night2_ok = await find_and_add_quota(page, f"Night 2 – {saturday}", night2_camp)
+    # Night 2: Saturday (grid should still be visible; no page reload needed)
+    night2_ok = await add_night_to_cart(page, f"Night 2 ({saturday})", saturday, night2_camp)
     if not night2_ok:
         return False
 

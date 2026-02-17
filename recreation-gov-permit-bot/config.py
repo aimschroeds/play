@@ -11,7 +11,15 @@ BEFORE RUNNING:
 
 # ── Recreation.gov permit page ─────────────────────────────────────────────────
 # Grand Canyon National Park - Backcountry Permits
-PERMIT_URL = "https://www.recreation.gov/permits/234652"
+# This URL goes directly to the detailed availability grid for June 2026.
+# The eapLotteryId parameter must be kept — it gates the EAP access window.
+# The date= parameter sets the grid view to start at June 1; all target weekends
+# fall within this view so we never need to change it.
+PERMIT_URL = (
+    "https://www.recreation.gov/permits/4675337/registration/detailed-availability"
+    "?date=2026-06-01"
+    "&eapLotteryId=d955c3d0-b6a9-4674-a07a-7832965a09ec"
+)
 
 # ── CDP endpoint for the already-running Chrome browser ────────────────────────
 CDP_ENDPOINT = "http://localhost:9222"
@@ -58,32 +66,79 @@ DELAY_BEFORE_RETRY = 2.0             # pause between quota-check retries
 MAX_QUOTA_RETRIES = 30               # how many times to retry if no quota shown yet
 
 # ── Selectors (update these after recording your click path) ──────────────────
-# These are best-guess CSS/text selectors. Recreation.gov uses React so IDs can
-# change; aria-labels and visible text are more stable.
+# These are best-guess CSS/text selectors for the DETAILED-AVAILABILITY GRID.
+# Recreation.gov uses React so generated class names change; prefer aria-labels
+# and data attributes.
 #
-# To record the actual path:
-#   Open DevTools → Elements → right-click the element → Copy → Copy selector
+# HOW TO FIND THE REAL SELECTORS:
+#   1. Open the permit URL in Chrome (logged in).
+#   2. Open DevTools → Elements.
+#   3. Hover over the element you want, right-click → Inspect.
+#   4. Right-click the highlighted node → Copy → Copy selector  (or Copy → Copy XPath).
+#   5. Paste the value into the relevant key below.
 #
 SELECTORS = {
-    # Button on the permit landing page that opens the date picker / booking flow
-    "book_now_button": "text=Book Now",
+    # ── Availability grid ──────────────────────────────────────────────────────
+    # The outer table / grid container
+    "availability_grid": (
+        ".rec-availability-grid, "
+        "[data-component='AvailabilityGrid'], "
+        "table.availability-table"
+    ),
 
-    # The calendar date cells — rec.gov uses buttons with aria-label like "June 5, 2026"
-    "date_cell_template": '[aria-label="{month_day_year}"]',   # fill with e.g. "June 5, 2026"
+    # Each row in the grid (one per campground / quota zone)
+    # NOTE: adjust after inspecting the actual grid rows
+    "quota_row": (
+        ".rec-availability-grid tbody tr, "
+        "[data-component='PermitQuotaRow'], "
+        "tr.availability-row"
+    ),
+
+    # The campground/zone name cell inside a row (first <td> or labelled cell)
+    "quota_name": (
+        "td:first-child, "
+        "[data-component='QuotaName'], "
+        ".quota-name, "
+        "th.availability-label"
+    ),
+
+    # A specific date cell within a row.
+    # rec.gov typically puts the date in a <th> column header with aria-label
+    # like "Friday, June 26, 2026" and each data cell has a matching data-date
+    # attribute.  Both patterns are tried.
+    # Template: fill {date} with "2026-06-26" (YYYY-MM-DD).
+    "date_column_header_template": (
+        '[aria-label*="{month_day}"], '   # e.g. aria-label contains "June 26"
+        'th[data-date="{date}"], '
+        'td[data-date="{date}"]'
+    ),
+
+    # The clickable availability cell at (row=campground, col=date).
+    # After finding the correct column index from the header, we select the
+    # <td> at that index inside the quota row.
+    # Template: fill {col_index} with the 1-based column number.
+    "date_cell_in_row_template": "td:nth-child({col_index})",
+
+    # Button or link inside an availability cell that triggers Add-to-Cart
+    "add_to_cart_button": (
+        "text=Add to Cart, "
+        "button[aria-label*='Add'], "
+        "a[aria-label*='Add']"
+    ),
 
     # Dropdown or field for number of people / group size
-    "people_input": '[aria-label*="people"], [aria-label*="People"], [name*="people"], [name*="groupSize"]',
-
-    # Each available quota row on the availability grid
-    # Typically a <tr> or <div> containing the campground name and an "Add to Cart" button
-    "quota_row": ".quota-row, [data-component='PermitQuotaRow'], tr.permit-quota",
-
-    # The campground name inside a quota row
-    "quota_name": ".quota-name, [data-component='QuotaName'], td.quota-name",
-
-    # The "Add to Cart" button inside a quota row
-    "add_to_cart_button": "text=Add to Cart",
+    # (may appear in a modal after clicking an available cell)
+    "people_input": (
+        '[aria-label*="people"], [aria-label*="People"], '
+        '[name*="people"], [name*="groupSize"], '
+        'input[id*="number-of-people"]'
+    ),
 
     # Confirmation that something was added to cart
-    "cart_confirmation": "text=Added to Cart, text=View Cart, [aria-label*='cart']",
+    "cart_confirmation": (
+        "text=Added to Cart, "
+        "text=View Cart, "
+        "[aria-label*='cart'], "
+        ".cart-notification"
+    ),
 }
