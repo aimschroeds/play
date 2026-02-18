@@ -6,12 +6,23 @@ recreation.gov), waits until 8:00 AM MST, then tries to add backcountry
 permits to your cart for the configured weekends and campgrounds.
 
 See config.py for all settings and the Chrome launch instructions.
+
+Flow per weekend attempt
+────────────────────────
+1. Navigate (fresh) to the detailed-availability grid URL.
+2. Wait for the grid to render.
+3. Click the correct Starting Area (district) button.
+4. Open the group-size counter and set it to NUM_PEOPLE.
+5. Click the available date cell for Night 1.
+6. Click the available date cell for Night 2 (grid stays open — no reload).
+7. Click "Book Now" to start checkout.
+8. Leave the browser open for the user to complete payment.
 """
 
 import asyncio
 import random
 import sys
-from datetime import datetime, date, timedelta
+from datetime import datetime, timedelta
 
 import pytz
 from playwright.async_api import async_playwright, Page, BrowserContext
@@ -19,6 +30,7 @@ from playwright.async_api import async_playwright, Page, BrowserContext
 from config import (
     CDP_ENDPOINT,
     PERMIT_URL,
+    PERMIT_URL_TEMPLATE,
     LAUNCH_TZ,
     LAUNCH_HOUR,
     LAUNCH_MINUTE,
@@ -26,7 +38,7 @@ from config import (
     NUM_PEOPLE,
     TARGET_WEEKENDS,
     CAMPGROUND_OPTIONS,
-    GROUP_SITE_KEYWORDS,
+    DISTRICT_FOR_CAMPGROUND,
     DELAY_BETWEEN_ACTIONS,
     DELAY_AFTER_NAVIGATION,
     DELAY_BEFORE_RETRY,
@@ -51,7 +63,6 @@ async def human_click(page: Page, locator_or_element) -> None:
     """Move mouse to element then click, like a human would."""
     box = await locator_or_element.bounding_box()
     if box:
-        # Aim slightly off-centre to avoid dead-centre robot tells
         x = box["x"] + box["width"] * random.uniform(0.3, 0.7)
         y = box["y"] + box["height"] * random.uniform(0.3, 0.7)
         await page.mouse.move(x, y, steps=random.randint(5, 15))
@@ -59,165 +70,294 @@ async def human_click(page: Page, locator_or_element) -> None:
     await locator_or_element.click()
 
 
-def is_group_site(name: str) -> bool:
-    """Return True if the site name looks like a group campsite."""
-    name_lower = name.lower()
-    return any(kw in name_lower for kw in GROUP_SITE_KEYWORDS)
+def format_date_label(date_str: str) -> str:
+    """
+    Convert a YYYY-MM-DD string to the format used in cell aria-labels.
+    e.g. "2026-06-26" → "June 26, 2026"   (no leading zero on the day)
+    """
+    dt = datetime.strptime(date_str, "%Y-%m-%d")
+    return dt.strftime("%B %-d, %Y")
 
 
 def seconds_until_launch() -> float:
     """
     Return how many seconds until LAUNCH_SECONDS_EARLY before 8:00 AM MST
-    on the next calendar day in that timezone.
+    (or MDT — we use America/Denver to honour DST automatically).
+
+    Checks today first; if today's window has already passed, waits for
+    tomorrow.  Returns 0 if we are already inside the launch window.
     """
     tz = pytz.timezone(LAUNCH_TZ)
     now = datetime.now(tz)
-    tomorrow = now.date() + timedelta(days=1)
-    target = tz.localize(
-        datetime(tomorrow.year, tomorrow.month, tomorrow.day,
-                 LAUNCH_HOUR, LAUNCH_MINUTE, 0)
-    ) - timedelta(seconds=LAUNCH_SECONDS_EARLY)
-    delta = (target - now).total_seconds()
-    return max(delta, 0)
+
+    for day_offset in (0, 1):
+        candidate_day = now.date() + timedelta(days=day_offset)
+        target = tz.localize(
+            datetime(candidate_day.year, candidate_day.month, candidate_day.day,
+                     LAUNCH_HOUR, LAUNCH_MINUTE, 0)
+        ) - timedelta(seconds=LAUNCH_SECONDS_EARLY)
+        delta = (target - now).total_seconds()
+        if delta > 0:
+            return delta
+
+    return 0.0   # already past both; run immediately
 
 
 async def wait_until_launch_window(page: Page) -> None:
     """
     Sleep in big chunks until we are close to the launch time, then navigate
-    to the permit page and wait the remaining seconds at the top of the queue.
+    to the permit page and burn the remaining seconds at the top of the queue.
     """
     secs = seconds_until_launch()
     if secs > 60:
-        log(f"Sleeping {secs/3600:.2f} h until pre-launch window …")
-        # Sleep in 60-s chunks so we can log progress
+        log(f"Sleeping {secs / 3600:.2f} h until pre-launch window …")
         while True:
             secs = seconds_until_launch()
             if secs <= 60:
                 break
             await asyncio.sleep(min(secs - 60, 300))
-            remaining = seconds_until_launch()
-            log(f"  {remaining/60:.1f} min remaining …")
+            log(f"  {seconds_until_launch() / 60:.1f} min remaining …")
 
-    # Pre-position on the permit page so we are ready to act immediately
+    # Pre-position on the permit page so we are ready to act at exactly 8:00
     log("Pre-positioning on permit page …")
     await page.goto(PERMIT_URL, wait_until="domcontentloaded")
     await human_delay(DELAY_AFTER_NAVIGATION)
 
     # Burn the last few seconds
-    secs = seconds_until_launch() + LAUNCH_SECONDS_EARLY  # time to actual 8:00
-    if secs > 0:
-        log(f"Waiting {secs:.1f} s until 8:00:00 AM MST …")
-        await asyncio.sleep(secs)
+    remaining = seconds_until_launch() + LAUNCH_SECONDS_EARLY  # time to actual 8:00
+    if remaining > 0:
+        log(f"Waiting {remaining:.1f} s until {LAUNCH_HOUR:02d}:{LAUNCH_MINUTE:02d}:00 …")
+        await asyncio.sleep(remaining)
 
     log("=== LAUNCH — attempting permits now ===")
 
 
-# ── Core permit flow ───────────────────────────────────────────────────────────
+# ── Setup steps (run once per weekend attempt) ─────────────────────────────────
 
-async def select_date(page: Page, date_str: str) -> bool:
+async def ensure_district(page: Page, campground_keyword: str) -> None:
     """
-    Click the calendar cell for the given date (YYYY-MM-DD).
-    Returns True on success.
+    Click the Starting Area (district) pill button that contains the campgrounds
+    for `campground_keyword`, unless it is already selected.
 
-    NOTE: Update this function after recording the actual click path on
-    recreation.gov.  The aria-label format may differ.
+    The district buttons look like:
+        <button class="district-picker-button" aria-pressed="true">
+          Classic GC Hike - via South Rim
+        </button>
     """
-    dt = datetime.strptime(date_str, "%Y-%m-%d")
-    # recreation.gov aria-labels look like "June 5, 2026"
-    aria_label = dt.strftime("%B %-d, %Y")   # e.g. "June 5, 2026"
-    selector = SELECTORS["date_cell_template"].format(month_day_year=aria_label)
+    district = DISTRICT_FOR_CAMPGROUND.get(campground_keyword)
+    if not district:
+        log(f"  No district mapping for '{campground_keyword}' — skipping district click")
+        return
 
-    log(f"  Selecting date: {aria_label}")
+    selector = SELECTORS["district_button_template"].format(district=district)
+    log(f"  Ensuring district '{district}' is selected …")
     try:
-        cell = page.locator(selector).first
-        await cell.wait_for(state="visible", timeout=5000)
-        await human_click(page, cell)
-        await human_delay()
-        return True
+        btn = page.locator(selector).first
+        await btn.wait_for(state="visible", timeout=8000)
+        pressed = await btn.get_attribute("aria-pressed")
+        if pressed == "true":
+            log("  District already selected.")
+        else:
+            await human_click(page, btn)
+            await human_delay(DELAY_AFTER_NAVIGATION)
+            log("  District button clicked.")
     except Exception as e:
-        log(f"  Could not find date cell for {aria_label}: {e}")
-        return False
+        log(f"  Warning: could not click district button: {e}")
 
 
-async def set_num_people(page: Page, n: int) -> None:
+async def set_group_size(page: Page, n: int) -> None:
     """
-    Set the group-size / number-of-people field to n.
+    Open the group-size counter dropdown, adjust to n people, then close it.
 
-    NOTE: Update selectors in config.py to match the actual input element.
+    The popup structure (from observed DOM):
+        [Guest counter button] → opens dialog
+        Inside dialog:
+            ⊖ button  |  count display  |  ⊕ button
+            [Close]
     """
-    log(f"  Setting group size to {n}")
+    log(f"  Setting group size to {n} …")
     try:
-        field = page.locator(SELECTORS["people_input"]).first
-        await field.wait_for(state="visible", timeout=5000)
-        await field.triple_click()            # select all existing text
-        await asyncio.sleep(random.uniform(0.1, 0.2))
-        await field.type(str(n), delay=random.randint(60, 140))
-        await human_delay()
+        # Open the counter dropdown
+        counter_btn = page.locator(SELECTORS["guest_counter_button"]).first
+        await counter_btn.wait_for(state="visible", timeout=8000)
+        await human_click(page, counter_btn)
+        await human_delay((0.5, 1.0))
+
+        # Wait for the popup to appear
+        popup = page.locator(SELECTORS["guest_counter_popup"])
+        await popup.wait_for(state="visible", timeout=5000)
+
+        # Read the current count from the displayed text on the button itself
+        # (the popup may just show a number in the label area)
+        current = None
+        try:
+            value_el = page.locator(SELECTORS["guest_counter_value"]).first
+            raw = await value_el.inner_text(timeout=3000)
+            current = int(raw.strip())
+            log(f"    Current count: {current}")
+        except Exception:
+            # Fall back: read from the counter button label "N Group Members"
+            try:
+                label = await counter_btn.inner_text()
+                current = int(label.strip().split()[0])
+                log(f"    Inferred count from button label: {current}")
+            except Exception:
+                log("    Could not read current count; assuming 1")
+                current = 1
+
+        # Click ⊕ or ⊖ to reach the target
+        delta = n - current
+        if delta > 0:
+            inc_btn = page.locator(SELECTORS["guest_counter_increment"]).first
+            for _ in range(delta):
+                await human_click(page, inc_btn)
+                await asyncio.sleep(random.uniform(0.2, 0.4))
+        elif delta < 0:
+            dec_btn = page.locator(SELECTORS["guest_counter_decrement"]).first
+            for _ in range(abs(delta)):
+                await human_click(page, dec_btn)
+                await asyncio.sleep(random.uniform(0.2, 0.4))
+
+        # Close the popup
+        close_btn = page.locator(SELECTORS["guest_counter_close"]).first
+        await human_click(page, close_btn)
+        await human_delay((0.3, 0.7))
+        log(f"    Group size set to {n}.")
+
     except Exception as e:
         log(f"  Warning: could not set group size: {e}")
 
 
-async def find_and_add_quota(
+# ── Core permit-selection flow ──────────────────────────────────────────────────
+
+async def click_available_night(
     page: Page,
     night_label: str,
-    campground_pref: str,
+    date_str: str,
+    campground_keyword: str,
 ) -> bool:
     """
-    On the availability grid for `night_label` (e.g. "Night 1 – June 5"),
-    find a non-group site matching `campground_pref` and click Add to Cart.
-    Returns True if a site was successfully added.
+    Find and click the available date-cell button for (campground_keyword, date_str).
 
-    NOTE: This is the section most likely to need adjustment after recording
-    the actual click path.  The quota row structure varies by permit type.
+    Cell buttons carry aria-labels like:
+        "CBG - Bright Angel Campground on June 26, 2026 - Available"
+
+    We match by the campground keyword (e.g. "Bright Angel") and the formatted
+    date label (e.g. "June 26, 2026"), excluding LARGE GROUP sites.
+
+    Returns True if the cell was found and clicked, False after MAX_QUOTA_RETRIES.
     """
-    log(f"  Looking for '{campground_pref}' quota on {night_label} …")
+    date_label = format_date_label(date_str)
+    selector = SELECTORS["available_cell_button_template"].format(
+        campground=campground_keyword,
+        date_label=date_label,
+    )
+    log(f"  [{night_label}] Looking for '{campground_keyword}' on {date_label} …")
 
-    for attempt in range(MAX_QUOTA_RETRIES):
-        rows = await page.locator(SELECTORS["quota_row"]).all()
-
-        for row in rows:
-            # Get campground name text
-            try:
-                name_el = row.locator(SELECTORS["quota_name"]).first
-                name = (await name_el.inner_text()).strip()
-            except Exception:
+    for attempt in range(1, MAX_QUOTA_RETRIES + 1):
+        try:
+            btn = page.locator(selector).first
+            is_vis = await btn.is_visible()
+            if not is_vis:
+                log(f"    Cell not visible yet (attempt {attempt}) — retrying …")
+                await asyncio.sleep(DELAY_BEFORE_RETRY)
                 continue
 
-            if is_group_site(name):
-                continue
-            if campground_pref.lower() not in name.lower():
+            is_enabled = await btn.is_enabled()
+            if not is_enabled:
+                log(f"    Cell disabled (attempt {attempt}) — retrying …")
+                await asyncio.sleep(DELAY_BEFORE_RETRY)
                 continue
 
-            # Found a matching, non-group row — try to click Add to Cart
-            try:
-                btn = row.locator(SELECTORS["add_to_cart_button"]).first
-                is_visible = await btn.is_visible()
-                is_disabled = await btn.is_disabled()
-                if not is_visible or is_disabled:
-                    log(f"    '{name}' found but button not available yet")
-                    break   # break inner, retry outer
-                log(f"    Adding to cart: {name}")
-                await human_click(page, btn)
-                await human_delay(DELAY_AFTER_NAVIGATION)
-                # Confirm cart addition
-                try:
-                    await page.locator(SELECTORS["cart_confirmation"]).first.wait_for(
-                        state="visible", timeout=6000
-                    )
-                    log(f"    ✓ Added '{name}' to cart for {night_label}")
-                    return True
-                except Exception:
-                    log(f"    Cart confirmation not seen — may still have worked")
-                    return True   # optimistic: proceed
-            except Exception as e:
-                log(f"    Error clicking Add to Cart for '{name}': {e}")
+            log(f"    Clicking cell: '{campground_keyword}' × {date_label}")
+            await human_click(page, btn)
+            await human_delay(DELAY_AFTER_NAVIGATION)
+            log(f"    ✓ Night selected: {night_label}")
+            return True
 
-        if attempt < MAX_QUOTA_RETRIES - 1:
-            log(f"    Quota not yet available, retry {attempt+1}/{MAX_QUOTA_RETRIES} …")
+        except Exception as e:
+            log(f"    Error on attempt {attempt}: {e}")
             await asyncio.sleep(DELAY_BEFORE_RETRY)
 
-    log(f"  ✗ Could not add '{campground_pref}' for {night_label}")
+    log(f"  ✗ Could not select '{campground_keyword}' for {night_label} after {MAX_QUOTA_RETRIES} tries")
     return False
+
+
+async def navigate_grid_to_date(page: Page, date_str: str) -> bool:
+    """
+    Ensure `date_str` (YYYY-MM-DD) is visible in the 4-day grid window.
+
+    Key insight from observed DOM: after selecting Night 1 the grid may scroll
+    to a different window.  Night 2 must be the consecutive night; we need to
+    scroll forward (or backward) until the target date column is rendered.
+
+    We detect visibility by checking whether ANY rec-availability-date button
+    whose aria-label contains the formatted date exists in the DOM.  We click
+    "Next 4 Days" (or "Prev") up to 20 times to reach it.
+
+    Returns True if the date was found, False if we gave up.
+    """
+    date_label = format_date_label(date_str)
+    # Any button for this date (regardless of availability status)
+    any_cell_selector = f'button.rec-availability-date[aria-label*="{date_label}"]'
+
+    log(f"  Navigating grid to show {date_label} …")
+    for step in range(20):
+        count = await page.locator(any_cell_selector).count()
+        if count > 0:
+            log(f"  Date {date_label} is now visible in grid (step {step}).")
+            return True
+
+        # Decide which direction to go by comparing target date to the first
+        # visible date header in the grid.
+        try:
+            first_sr = await page.locator(
+                '[aria-label="Availability by Site or Zone and Dates"] '
+                '[role="columnheader"] .rec-sr-only'
+            ).first.inner_text(timeout=2000)
+            # "Monday, June 1, 2026" → parse and compare to target
+            first_dt = datetime.strptime(first_sr.strip(), "%A, %B %d, %Y")
+            target_dt = datetime.strptime(date_str, "%Y-%m-%d")
+            go_next = target_dt >= first_dt
+        except Exception:
+            go_next = True  # default: go forward
+
+        btn_key = "grid_next_button" if go_next else "grid_prev_button"
+        try:
+            nav_btn = page.locator(SELECTORS[btn_key]).first
+            await nav_btn.wait_for(state="visible", timeout=5000)
+            await human_click(page, nav_btn)
+            await human_delay((0.6, 1.2))
+        except Exception as e:
+            log(f"  Could not click nav button: {e}")
+            break
+
+    log(f"  Warning: could not navigate grid to {date_label} after 20 steps")
+    return False
+
+
+async def click_book_now(page: Page) -> bool:
+    """
+    Click the "Book Now" button in the sticky bottom bar.
+    The button is only enabled after at least one night has been selected.
+    Returns True if clicked successfully.
+    """
+    log("  Clicking 'Book Now' …")
+    try:
+        btn = page.locator(SELECTORS["book_now_button"]).first
+        await btn.wait_for(state="visible", timeout=8000)
+        # Wait for it to become enabled (it starts disabled)
+        for _ in range(20):
+            if await btn.is_enabled():
+                break
+            await asyncio.sleep(0.3)
+        await human_click(page, btn)
+        await human_delay(DELAY_AFTER_NAVIGATION)
+        log("  ✓ 'Book Now' clicked — checkout page should be loading")
+        return True
+    except Exception as e:
+        log(f"  Warning: could not click 'Book Now': {e}")
+        return False
 
 
 async def try_weekend(
@@ -228,69 +368,70 @@ async def try_weekend(
 ) -> bool:
     """
     Attempt to book a two-night permit (Friday + Saturday) with the given
-    campground preference list.  Returns True if both nights were added.
+    campground preference pair.
+
+    Steps:
+      1. Navigate fresh to the detailed-availability grid.
+      2. Click the correct Starting Area district button.
+      3. Set the group size via the guest counter.
+      4. Click Night 1 (Friday) cell.
+      5. Click Night 2 (Saturday) cell.
+      6. Click "Book Now".
+
+    Returns True if all steps succeeded.
     """
     night1_camp, night2_camp = campground_option
-    log(f"Trying weekend {friday} / {saturday}  [{night1_camp} → {night2_camp}]")
+    log(f"Trying {friday} / {saturday}  [{night1_camp} → {night2_camp}]")
 
-    # Reload the permit page to get a fresh booking form
-    await page.goto(PERMIT_URL, wait_until="domcontentloaded")
+    # Navigate fresh with date=<friday> so the grid opens with both Fri+Sat
+    # already in the 4-day window — no scrolling needed to see Night 1.
+    weekend_url = PERMIT_URL_TEMPLATE.format(date=friday)
+    await page.goto(weekend_url, wait_until="domcontentloaded")
     await human_delay(DELAY_AFTER_NAVIGATION)
 
-    # Click "Book Now" to open the booking flow
+    # Wait for the grid to render
     try:
-        book_btn = page.locator(SELECTORS["book_now_button"]).first
-        await book_btn.wait_for(state="visible", timeout=8000)
-        await human_click(page, book_btn)
-        await human_delay(DELAY_AFTER_NAVIGATION)
-    except Exception as e:
-        log(f"  Could not click Book Now: {e}")
-        return False
-
-    # Select the entry date (Friday)
-    if not await select_date(page, friday):
-        return False
-
-    # Select the exit date (Sunday = Friday + 2 days) or number-of-nights = 2
-    # recreation.gov may show a calendar for exit date or a nights selector.
-    # Try selecting Saturday first (end of 2-night stay), then Sunday.
-    # Adjust this section based on your recorded click path.
-    sunday = (datetime.strptime(saturday, "%Y-%m-%d") + timedelta(days=1)).strftime("%Y-%m-%d")
-    exit_selected = await select_date(page, sunday)
-    if not exit_selected:
-        # Fallback: maybe the site uses number-of-nights instead of exit date
-        log("  Exit date click failed; trying to set nights = 2 via input")
-        try:
-            nights_field = page.locator('[aria-label*="nights"], [name*="nights"]').first
-            await nights_field.triple_click()
-            await nights_field.type("2", delay=random.randint(60, 140))
-        except Exception:
-            log("  Warning: could not set number of nights")
-
-    await human_delay()
-
-    # Set group size
-    await set_num_people(page, NUM_PEOPLE)
-
-    # Submit the search / availability check
-    try:
-        search_btn = page.locator('text=Search, text=Check Availability, [type="submit"]').first
-        if await search_btn.is_visible():
-            await human_click(page, search_btn)
-            await human_delay(DELAY_AFTER_NAVIGATION)
+        await page.locator(SELECTORS["availability_grid"]).first.wait_for(
+            state="visible", timeout=15000
+        )
     except Exception:
-        pass  # Not all flows have an explicit Search button
+        log("  Availability grid did not appear — page may still be loading")
 
-    # Handle each night's quota selection
-    night1_ok = await find_and_add_quota(page, f"Night 1 – {friday}", night1_camp)
+    # ── Step 1: Select the correct Starting Area ───────────────────────────────
+    # Night 1 determines which district we need (both nights should be same district
+    # for the options in CAMPGROUND_OPTIONS, but we switch between cells on the same
+    # page — the district picker filters which rows are shown).
+    await ensure_district(page, night1_camp)
+
+    # ── Step 2: Set group size ─────────────────────────────────────────────────
+    await set_group_size(page, NUM_PEOPLE)
+
+    # ── Step 3: Select Night 1 (Friday) ───────────────────────────────────────
+    night1_ok = await click_available_night(
+        page, f"Night 1 Fri {friday}", friday, night1_camp
+    )
     if not night1_ok:
         return False
 
-    night2_ok = await find_and_add_quota(page, f"Night 2 – {saturday}", night2_camp)
+    # ── Step 4: Select Night 2 (Saturday) — no page reload needed ─────────────
+    # After Night 1 is selected the grid may have shifted to a different date
+    # window (observed: the grid sometimes scrolls away from the target date).
+    # Navigate the grid so that Saturday's column is visible before clicking.
+    await navigate_grid_to_date(page, saturday)
+
+    # After Night 1, the grid shows ALL districts simultaneously, so we don't
+    # need to switch the district picker for Night 2 (the site will be visible
+    # regardless of which district pill is currently selected).
+
+    night2_ok = await click_available_night(
+        page, f"Night 2 Sat {saturday}", saturday, night2_camp
+    )
     if not night2_ok:
         return False
 
-    return True
+    # ── Step 5: Book Now ───────────────────────────────────────────────────────
+    booked = await click_book_now(page)
+    return booked
 
 
 # ── Main ───────────────────────────────────────────────────────────────────────
@@ -302,10 +443,10 @@ async def main() -> None:
             browser = await pw.chromium.connect_over_cdp(CDP_ENDPOINT)
         except Exception as e:
             log(f"ERROR: Could not connect to Chrome: {e}")
-            log("Make sure Chrome is running with:  --remote-debugging-port=9222")
+            log("Make sure Chrome is running with:  bash start_chrome.sh")
             sys.exit(1)
 
-        # Use the first available context (inherits the existing login session)
+        # Reuse the existing context (inherits the logged-in session)
         contexts = browser.contexts
         if contexts:
             context: BrowserContext = contexts[0]
@@ -314,33 +455,32 @@ async def main() -> None:
             context = await browser.new_context()
             log("Warning: no existing context found; you may not be logged in")
 
-        # Reuse an existing tab or open a new one
         pages = context.pages
         page: Page = pages[0] if pages else await context.new_page()
 
-        # Wait until the right moment, pre-positioned on the permit page
+        # Wait until the launch window, pre-positioned on the permit page
         await wait_until_launch_window(page)
 
-        # ── Try each weekend × campground combination ──────────────────────
+        # ── Try each weekend × campground combination ──────────────────────────
         success = False
         for friday, saturday in TARGET_WEEKENDS:
             for option in CAMPGROUND_OPTIONS:
                 ok = await try_weekend(page, friday, saturday, option)
                 if ok:
-                    log(f"\n✓ SUCCESS — permits added to cart for {friday} / {saturday}")
-                    log("  Complete your checkout in the browser before the cart expires!")
+                    log(f"\n✓ SUCCESS — 'Book Now' clicked for {friday} / {saturday}")
+                    log("  Complete checkout in the browser before the session expires!")
                     success = True
                     break
             if success:
                 break
 
         if not success:
-            log("\n✗ Could not add any permits to cart.")
-            log("  The permits may be sold out or the selectors need updating.")
+            log("\n✗ Could not book any permit combination.")
+            log("  Permits may be sold out or selectors need updating.")
             log("  Check the browser window and complete any partial progress manually.")
 
-        log("Bot finished. Browser connection left open.")
-        # Do NOT close the browser — leave it open so the user can complete checkout
+        log("Bot finished. Browser left open for checkout.")
+        # Do NOT close the browser — leave it for the user to complete payment
 
 
 if __name__ == "__main__":
