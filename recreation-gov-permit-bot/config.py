@@ -113,28 +113,13 @@ SELECTORS = {
     # that are NOT the "Close" button.  We target them by their SVG path content
     # (circle-minus / circle-plus icons from the Sarsaparilla icon set) or by
     # falling back to positional nth-child ordering.
-    "guest_counter_decrement": (
-        "#guest-counter-popup button[aria-label*='Decrease'], "
-        "#guest-counter-popup button[aria-label*='decrease'], "
-        "#guest-counter-popup button[aria-label*='Remove'], "
-        "#guest-counter-popup button:nth-child(1)"
-    ),
-    "guest_counter_increment": (
-        "#guest-counter-popup button[aria-label*='Increase'], "
-        "#guest-counter-popup button[aria-label*='increase'], "
-        "#guest-counter-popup button[aria-label*='Add'], "
-        "#guest-counter-popup button:nth-child(3)"
-    ),
-    # The numeric display between ⊖ and ⊕ (may be a span or a read-only input)
-    "guest_counter_value": (
-        "#guest-counter-popup .sarsa-stepper-value, "
-        "#guest-counter-popup [class*='stepper'] span, "
-        "#guest-counter-popup input[type='number'], "
-        "#guest-counter-popup button + span, "
-        "#guest-counter-popup button + div"
-    ),
-    # "Close" button to dismiss the popup
-    "guest_counter_close": '#guest-counter-popup button:has-text("Close")',
+    # ⊖ is the 1st .sarsa-button-subtle child; ⊕ is the 3rd.
+    # These are scoped to the already-resolved popup locator in code, so no
+    # "#guest-counter-popup" prefix is needed here.
+    "guest_counter_decrement": ".sarsa-button-subtle:nth-child(1)",
+    "guest_counter_increment": ".sarsa-button-subtle:nth-child(3)",
+    # "Close" button lives inside .sarsa-dropdown-base-popup-actions-content
+    "guest_counter_close": ".sarsa-dropdown-base-popup-actions-content > .sarsa-button",
 
     # ── Availability grid ─────────────────────────────────────────────────────
     # The main (non-sticky) grid container.
