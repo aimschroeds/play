@@ -184,43 +184,37 @@ async def set_group_size(page: Page, n: int) -> None:
         await human_click(page, counter_btn)
         await human_delay((0.5, 1.0))
 
-        # Wait for the popup to appear
-        popup = page.locator(SELECTORS["guest_counter_popup"])
+        # Wait for the popup to appear — use .first to avoid strict-mode
+        # violation (the DOM contains a second hidden empty clone of the dialog)
+        popup = page.locator(SELECTORS["guest_counter_popup"]).first
         await popup.wait_for(state="visible", timeout=5000)
 
-        # Read the current count from the displayed text on the button itself
-        # (the popup may just show a number in the label area)
-        current = None
+        # Read the current count from the counter button label "N Group Members"
+        current = 1
         try:
-            value_el = page.locator(SELECTORS["guest_counter_value"]).first
-            raw = await value_el.inner_text(timeout=3000)
-            current = int(raw.strip())
-            log(f"    Current count: {current}")
+            label = await counter_btn.inner_text()
+            current = int(label.strip().split()[0])
+            log(f"    Current count (from button label): {current}")
         except Exception:
-            # Fall back: read from the counter button label "N Group Members"
-            try:
-                label = await counter_btn.inner_text()
-                current = int(label.strip().split()[0])
-                log(f"    Inferred count from button label: {current}")
-            except Exception:
-                log("    Could not read current count; assuming 1")
-                current = 1
+            log("    Could not read current count; assuming 1")
 
-        # Click ⊕ or ⊖ to reach the target
+        # Click ⊕ or ⊖ to reach the target.
+        # Buttons inside the popup (scoped to avoid the hidden clone):
+        #   child(1) = ⊖  child(3) = ⊕  (matching .sarsa-button-subtle)
         delta = n - current
         if delta > 0:
-            inc_btn = page.locator(SELECTORS["guest_counter_increment"]).first
+            inc_btn = popup.locator(SELECTORS["guest_counter_increment"])
             for _ in range(delta):
                 await human_click(page, inc_btn)
                 await asyncio.sleep(random.uniform(0.2, 0.4))
         elif delta < 0:
-            dec_btn = page.locator(SELECTORS["guest_counter_decrement"]).first
+            dec_btn = popup.locator(SELECTORS["guest_counter_decrement"])
             for _ in range(abs(delta)):
                 await human_click(page, dec_btn)
                 await asyncio.sleep(random.uniform(0.2, 0.4))
 
         # Close the popup
-        close_btn = page.locator(SELECTORS["guest_counter_close"]).first
+        close_btn = popup.locator(SELECTORS["guest_counter_close"])
         await human_click(page, close_btn)
         await human_delay((0.3, 0.7))
         log(f"    Group size set to {n}.")
