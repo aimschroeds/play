@@ -19,6 +19,7 @@ Flow per weekend attempt
 8. Leave the browser open for the user to complete payment.
 """
 
+import argparse
 import asyncio
 import random
 import sys
@@ -436,7 +437,7 @@ async def try_weekend(
 
 # ── Main ───────────────────────────────────────────────────────────────────────
 
-async def main() -> None:
+async def main(skip_timer: bool = False) -> None:
     async with async_playwright() as pw:
         log(f"Connecting to Chrome at {CDP_ENDPOINT} …")
         try:
@@ -459,7 +460,10 @@ async def main() -> None:
         page: Page = pages[0] if pages else await context.new_page()
 
         # Wait until the launch window, pre-positioned on the permit page
-        await wait_until_launch_window(page)
+        if skip_timer:
+            log("--now flag set — skipping timer, running immediately")
+        else:
+            await wait_until_launch_window(page)
 
         # ── Try each weekend × campground combination ──────────────────────────
         success = False
@@ -484,4 +488,10 @@ async def main() -> None:
 
 
 if __name__ == "__main__":
-    asyncio.run(main())
+    parser = argparse.ArgumentParser(description="Recreation.gov permit bot")
+    parser.add_argument(
+        "--now", action="store_true",
+        help="Skip the 8 AM timer and run immediately"
+    )
+    args = parser.parse_args()
+    asyncio.run(main(skip_timer=args.now))
