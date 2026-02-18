@@ -175,13 +175,22 @@ SELECTORS = {
     "book_now_button": 'button.sarsa-button-primary:has-text("Book Now")',
 
     # ── Grid date-window navigation ───────────────────────────────────────────
-    # After Night 1 is selected the grid may show a different 4-day window than
-    # the one containing Night 2.  These buttons let us scroll the grid forward
-    # or backward without reloading the page (itinerary state is preserved).
-    #   <button …>Next 4 Days</button>  /  <button …>Prev 4 Days</button>
-    # Use the FIRST (non-sticky-header) instance to avoid duplicates.
-    "grid_next_button": 'button:has-text("Next 4 Days")',
-    "grid_prev_button": 'button:has-text("Prev 4 Days")',
+    # After Night 1 is selected the grid may show a different window than the
+    # one containing Night 2.  These buttons scroll the grid forward/backward
+    # without reloading the page (itinerary state is preserved).
+    #
+    # Confirmed from live DOM (2026-02-18): button text is "Next 5 Days" /
+    # "Prev 5 Days" in the expanded (full-width) view.  We match on the
+    # xs-sized button class + "Next"/"Prev" substring so the selector survives
+    # if the site ever changes the step count.
+    #
+    #   <button class="sarsa-button sarsa-button-link sarsa-button-xs …">
+    #     <span class="rec-sr-only">View </span>Next 5 Days
+    #   </button>
+    #
+    # Two copies exist (main + sticky header); .first picks the main one.
+    "grid_next_button": 'button.sarsa-button-xs:has-text("Next")',
+    "grid_prev_button": 'button.sarsa-button-xs:has-text("Prev")',
     # "Clear Dates" button — resets the itinerary (used only if we need to retry)
     "clear_dates_button": 'button:has-text("Clear Dates")',
 
