@@ -189,14 +189,14 @@ async def set_group_size(page: Page, n: int) -> None:
         popup = page.locator(SELECTORS["guest_counter_popup"]).first
         await popup.wait_for(state="visible", timeout=5000)
 
-        # Read the current count from the counter button label "N Group Members"
-        current = 1
+        # Read the current count from the number input inside the popup
+        current = 0
         try:
-            label = await counter_btn.inner_text()
-            current = int(label.strip().split()[0])
-            log(f"    Current count (from button label): {current}")
+            val = await popup.locator("#guest-counter-number-field-People").get_attribute("value")
+            current = int(val) if val is not None and val.isdigit() else 0
+            log(f"    Current count (from input): {current}")
         except Exception:
-            log("    Could not read current count; assuming 1")
+            log("    Could not read current count; assuming 0")
 
         # Click ⊕ or ⊖ to reach the target.
         # Buttons inside the popup (scoped to avoid the hidden clone):

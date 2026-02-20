@@ -109,15 +109,9 @@ SELECTORS = {
     "guest_counter_popup": "#guest-counter-popup",
 
     # Inside the popup: ⊖  <count>  ⊕  layout.
-    # The decrement (⊖) and increment (⊕) are the first two buttons in the popup
-    # that are NOT the "Close" button.  We target them by their SVG path content
-    # (circle-minus / circle-plus icons from the Sarsaparilla icon set) or by
-    # falling back to positional nth-child ordering.
-    # ⊖ is the 1st .sarsa-button-subtle child; ⊕ is the 3rd.
-    # These are scoped to the already-resolved popup locator in code, so no
-    # "#guest-counter-popup" prefix is needed here.
-    "guest_counter_decrement": ".sarsa-button-subtle:nth-child(1)",
-    "guest_counter_increment": ".sarsa-button-subtle:nth-child(3)",
+    # Targeted by stable aria-label attributes on the buttons.
+    "guest_counter_decrement": 'button[aria-label="Remove Peoples"]',
+    "guest_counter_increment": 'button[aria-label="Add Peoples"]',
     # "Close" button lives inside .sarsa-dropdown-base-popup-actions-content
     "guest_counter_close": ".sarsa-dropdown-base-popup-actions-content > .sarsa-button",
 
