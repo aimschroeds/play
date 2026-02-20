@@ -14,6 +14,77 @@ Give the agent **real capabilities** but inside a **blast radius you control**:
 
 ---
 
+## What You Do vs What the Agent Does
+
+Understanding this split is critical. OpenClaw is designed to evolve, but it needs you to set the initial boundaries.
+
+### You Must Do (Manual, One-Time)
+
+| Task | Why |
+|---|---|
+| Flash Pi OS and harden the system | The agent doesn't exist yet |
+| Create all burner accounts (email, phone, messaging) | Requires human identity verification (CAPTCHAs, phone verification) |
+| Set up the prepaid payment card | Requires human identity and a bank account |
+| Install Node.js and OpenClaw | System-level install before the agent is running |
+| Write initial SOUL.md | Defines who the agent IS — it can't bootstrap its own personality from nothing |
+| Write initial AGENTS.md | The operating contract and safety rules — these must come from you |
+| Write initial USER.md | Who you are — the agent doesn't know you yet |
+| Write initial TOOLS.md | Which tools are enabled/disabled — security boundary you control |
+| Write initial HEARTBEAT.md | What to check proactively — the agent shouldn't decide this itself at first |
+| Connect channels (Telegram bot, email IMAP) | Requires API keys and authentication you set up in Phase 0 |
+| Set up the kill switch and log backups | External monitoring the agent can't self-provision |
+| Enter API keys (Anthropic, Brave, etc.) | Secrets you manage |
+
+### The Agent Does (Autonomous, Over Time)
+
+| Task | How |
+|---|---|
+| Update SOUL.md as it learns who it is | It will ask permission before modifying its soul |
+| Update MEMORY.md with facts about you | Learned from conversations — your preferences, patterns, context |
+| Write daily logs to memory/YYYY-MM-DD.md | Automatic conversation summaries |
+| Compact old memories | Keeps MEMORY.md from growing forever — drops noise, keeps facts |
+| Update USER.md preferences section | As it learns what you like (bullet points vs paragraphs, timing, etc.) |
+| Run heartbeat checks | Reads HEARTBEAT.md every 30 min, reports or stays quiet |
+| Draft email replies | Prepares responses for your approval |
+| Send messages on approved channels | Within the rate limits you set |
+| Search the web and summarize findings | Using Brave Search API |
+| Schedule reminders and cron jobs | Within the 5-job limit |
+
+### Key Insight
+
+**You build the cage. The agent furnishes the room.**
+
+The initial config files (SOUL, AGENTS, USER, TOOLS, HEARTBEAT) are your guardrails. Once those are in place, the agent operates autonomously within them and gradually learns to be more useful. You expand its permissions over time by editing those files.
+
+---
+
+## Config File Setup Order
+
+OpenClaw reads 8 core Markdown files from your workspace. Here's the order to configure them and what each does:
+
+| Order | File | What It Does | Who Writes It |
+|---|---|---|---|
+| 1 | **AGENTS.md** | Operating contract — priorities, boundaries, safety rules, memory policy | You (initial), you (ongoing) |
+| 2 | **SOUL.md** | Personality — voice, values, behavioral constraints | You (initial), agent (evolves with permission) |
+| 3 | **USER.md** | About you — name, timezone, preferences, communication style | You (initial), agent (learns preferences) |
+| 4 | **TOOLS.md** | What tools are enabled/disabled and rate limits | You (always — security boundary) |
+| 5 | **IDENTITY.md** | Structured identity (name, role, avatar) — optional, the onboarding wizard fills this | Agent or you |
+| 6 | **HEARTBEAT.md** | Proactive check list — what to monitor every 30 min | You (initial), you (expand over time) |
+| 7 | **MEMORY.md** | Long-term memory — facts, compressed history | Agent (automatic) |
+| 8 | **BOOTSTRAP.md** | First-run interview script — skip after initial setup | Pre-built, one-time use |
+
+**First message to your agent:** "Hey, let's get you set up. Read BOOTSTRAP.md and walk me through it." This triggers the onboarding conversation where the agent fills in IDENTITY.md and starts learning about you.
+
+**After bootstrap:** Edit AGENTS.md, SOUL.md, and HEARTBEAT.md yourself. Don't let the agent write its own safety rules.
+
+### SOUL.md vs HEARTBEAT.md — Which First?
+
+**SOUL.md first.** It loads into the system prompt on every session start. Without it, the agent has no personality, no boundaries, no sense of its sandboxed environment. HEARTBEAT.md is only read during heartbeat cycles (every 30 min), so it can come second.
+
+The config templates in `config/` are pre-written with sensible defaults for a Pi sandbox. The `install-openclaw.sh` script copies them into the workspace automatically.
+
+---
+
 ## Phase 0: Sandboxed Account Setup (Do This First, From Your Laptop)
 
 Set all of this up **before** the Pi is online. Use a password manager (1Password / Bitwarden) to store everything.
@@ -92,57 +163,35 @@ This is the critical financial guardrail.
 
 Assumes you've already flashed Raspberry Pi OS Lite and can SSH in (see the `raspberry-pi-headless-setup` repo).
 
-### 1.1 — OS Basics
+### Automated
 
 ```bash
-# Update everything
-sudo apt update && sudo apt full-upgrade -y
+# Copy your SSH key to the Pi first
+ssh-copy-id pi@raspberrypi.local
 
-# Set hostname
-sudo hostnamectl set-hostname clawpi
-
-# Set timezone
-sudo timedatectl set-timezone America/New_York  # adjust
+# Then run the hardening script
+scp scripts/harden-pi.sh pi@raspberrypi.local:~
+ssh pi@raspberrypi.local './harden-pi.sh'
 ```
 
-### 1.2 — Dedicated User (Don't Run as Pi)
+The script handles everything: updates, hostname, dedicated `openclaw` user, SSH lockdown, firewall (SSH only), auto security updates, Docker install, and resource limits.
+
+Configure with environment variables before running:
 
 ```bash
-# Create a dedicated user for OpenClaw
-sudo adduser --disabled-password --gecos "" openclaw
-
-# Give it Docker access (needed later)
-sudo usermod -aG docker openclaw
+CLAWPI_HOSTNAME=clawpi CLAWPI_TIMEZONE=America/New_York ssh pi@raspberrypi.local './harden-pi.sh'
 ```
 
-### 1.3 — SSH Lockdown
+### What the Script Does (Manual Reference)
 
-```bash
-# On your laptop — copy your key to the new user
-ssh-copy-id openclaw@clawpi.local
-
-# On the Pi — disable password auth
-sudo sed -i 's/^#PasswordAuthentication yes/PasswordAuthentication no/' /etc/ssh/sshd_config
-sudo sed -i 's/^PasswordAuthentication yes/PasswordAuthentication no/' /etc/ssh/sshd_config
-sudo systemctl restart sshd
-```
-
-### 1.4 — Firewall
-
-```bash
-sudo apt install ufw -y
-
-# Default deny incoming
-sudo ufw default deny incoming
-sudo ufw default allow outgoing
-
-# Allow SSH only
-sudo ufw allow ssh
-
-# Enable
-sudo ufw enable
-sudo ufw status
-```
+1. **Updates** all packages
+2. **Sets hostname** to `clawpi` (configurable)
+3. **Creates `openclaw` user** — dedicated, no password, copies your SSH key
+4. **Locks SSH** — key-only auth, no root login, max 3 attempts
+5. **Firewall** — deny all incoming except SSH. Port 18789 (Gateway) is NOT exposed
+6. **Auto security updates** via unattended-upgrades
+7. **Docker** — installed for browser/skill sandboxing
+8. **Resource limits** — prevents openclaw user from consuming all RAM/CPU
 
 **Do NOT expose port 18789 (OpenClaw Gateway) to the network.** Access it via SSH tunnel only:
 
@@ -151,63 +200,52 @@ sudo ufw status
 ssh -L 18789:127.0.0.1:18789 openclaw@clawpi.local
 ```
 
-### 1.5 — Automatic Security Updates
-
-```bash
-sudo apt install unattended-upgrades -y
-sudo dpkg-reconfigure -plow unattended-upgrades
-```
-
 ---
 
 ## Phase 2: Install OpenClaw
 
-### 2.1 — Install Node.js 22
+### Automated
 
 ```bash
-# Switch to the openclaw user
-sudo -u openclaw -i
+# SSH as the openclaw user
+ssh openclaw@clawpi.local
 
-# Install Node via nvm
-curl -o- https://raw.githubusercontent.com/nvm-sh/nvm/v0.40.1/install.sh | bash
-source ~/.bashrc
-nvm install 22
-node --version  # should be 22.x
+# Copy the project to the Pi (from your laptop)
+scp -r scripts/ config/ openclaw@clawpi.local:~/openclaw-pi-sandbox/
+
+# Run the install script
+ssh openclaw@clawpi.local '~/openclaw-pi-sandbox/scripts/install-openclaw.sh'
 ```
 
-### 2.2 — Install OpenClaw
+The script handles: nvm + Node.js 22, OpenClaw install, interactive onboarding wizard, security defaults (loopback binding), copying config templates (SOUL.md, HEARTBEAT.md, etc.), and systemd service setup.
+
+### What the Script Does (Manual Reference)
+
+1. **Installs nvm** and **Node.js 22**
+2. **Installs OpenClaw** globally via npm
+3. **Runs `openclaw onboard`** — interactive wizard where you:
+   - Bind gateway to `127.0.0.1:18789` (loopback only!)
+   - Create workspace at `~/.openclaw/`
+   - Enter your LLM provider API key (Anthropic/OpenAI)
+   - Skip channels for now (we add them in Phase 3)
+4. **Enforces loopback binding** — if the gateway is bound to 0.0.0.0, the script fixes it
+5. **Copies config templates** from `config/` into the workspace (SOUL.md, HEARTBEAT.md, AGENTS.md, USER.md, TOOLS.md)
+6. **Installs systemd service** — auto-starts on boot, runs even when not logged in
+
+### Post-Install: Your First Message
+
+After install, access the Gateway UI:
 
 ```bash
-npm install -g openclaw@latest
-
-# Run the onboarding wizard
-openclaw onboard
+ssh -L 18789:127.0.0.1:18789 openclaw@clawpi.local
+# Then open http://localhost:18789
 ```
 
-The wizard will walk you through:
-1. **Gateway setup** — bind to `127.0.0.1:18789` (loopback only!)
-2. **Workspace** — creates `~/.openclaw/`
-3. **LLM provider** — enter your Anthropic/OpenAI API key
-4. **Channels** — skip for now, we'll add them manually
+Send this as your **very first message**:
 
-### 2.3 — Bind to Loopback Only
+> "Hey, let's get you set up. Read BOOTSTRAP.md and walk me through it."
 
-After onboarding, verify the gateway only listens on localhost:
-
-```bash
-# Check the config
-grep -r "host" ~/.openclaw/gateway.*
-
-# If it says 0.0.0.0, change it to 127.0.0.1
-# The Gateway should NEVER be exposed to the network
-```
-
-### 2.4 — Install as Systemd Service
-
-```bash
-openclaw onboard --install-daemon
-# This creates a systemd user service that auto-starts on boot
-```
+This triggers the onboarding conversation where the agent fills in IDENTITY.md and starts learning about you. After that, it will use the SOUL.md, AGENTS.md, and other config files you pre-loaded.
 
 ---
 
@@ -257,36 +295,17 @@ The agent doesn't get direct card credentials. Instead:
 
 ## Phase 4: Permission Guardrails
 
-### 4.1 — Agent System Prompt
+### 4.1 — Config Files (Pre-Written)
 
-In your workspace config, set clear boundaries:
+The `config/` directory contains ready-to-use templates. The install script copies them into the workspace:
 
-```markdown
-## Rules
+- **`config/SOUL.md`** — Personality, boundaries, sandbox awareness. Includes spending limits, message rate limits, and the "don't act without permission" rules.
+- **`config/AGENTS.md`** — Operating contract. Priorities (safety > usefulness > transparency), memory policy, anti-prompt-injection rules.
+- **`config/TOOLS.md`** — Shell disabled, browser disabled, cron limited to 5 jobs, ClawHub auto-install disabled, rate limits on all channels.
+- **`config/HEARTBEAT.md`** — Check email, calendar, system health every 30 min. Report-only mode for weeks 1-2.
+- **`config/USER.md`** — Template for your details. Fill in your name, timezone, and preferences before or after install.
 
-- You MUST NOT send more than 20 messages per hour across all channels
-- You MUST NOT make purchases over $10 without asking me first via Telegram
-- You MUST NOT sign up for recurring subscriptions
-- You MUST NOT share personal information, real name, or real contact details
-- You MUST NOT execute shell commands that modify system files
-- You MUST log every external action (email sent, message sent, payment made)
-- If uncertain about an action, ask me via Telegram before proceeding
-```
-
-### 4.2 — OpenClaw Permission Controls
-
-```yaml
-# In workspace config — restrict dangerous tools
-tools:
-  shell:
-    enabled: false          # No raw shell access
-  browser:
-    enabled: true
-    sandbox: docker         # Run browser in Docker container
-  cron:
-    enabled: true
-    max_jobs: 5             # Limit scheduled tasks
-```
+Edit these **before running `install-openclaw.sh`** to customize, or edit them in-place on the Pi at `~/.openclaw/workspaces/*/`.
 
 ### 4.3 — Twilio Rate Limits (External Guardrail)
 
@@ -326,42 +345,66 @@ clawhub:
 
 ## Phase 6: Monitoring & Kill Switch
 
-### 6.1 — Action Log
+### 6.1 — Log Backup (scripts/backup-logs.sh)
 
-OpenClaw stores conversations as Markdown in `~/.openclaw/`. Set up a cron job to sync logs:
+Run from your laptop. Syncs the entire `~/.openclaw/` directory to your machine:
 
 ```bash
-# Cron: sync logs to your laptop every hour
-# On your laptop's crontab:
-0 * * * * rsync -az openclaw@clawpi.local:~/.openclaw/workspaces/ ~/openclaw-logs/
+# One-time sync
+./scripts/backup-logs.sh
+
+# Install hourly cron job
+./scripts/backup-logs.sh --install-cron
+
+# Remove cron job
+./scripts/backup-logs.sh --uninstall-cron
 ```
 
-### 6.2 — Alerts
+Configure with environment variables: `CLAWPI_HOST`, `CLAWPI_USER`, `CLAWPI_LOG_DIR`, `CLAWPI_SSH_PORT`.
 
-Set up notifications for critical events:
+### 6.2 — Kill Switch (scripts/kill-agent.sh)
 
-- **Privacy.com**: Transaction alerts to your real phone (already enabled)
-- **Twilio**: Usage alerts when approaching limits
-- **Telegram**: Pin a "status" chat where the agent reports what it did every hour
+Run from your laptop. Multiple escalation levels:
 
-### 6.3 — Kill Switches (Multiple Layers)
+```bash
+# Check if agent is running
+./scripts/kill-agent.sh --status
+
+# Graceful stop (stop systemd service)
+./scripts/kill-agent.sh
+
+# Hard kill (SIGTERM then SIGKILL all Node processes)
+./scripts/kill-agent.sh --hard
+
+# Nuclear option (shut down the entire Pi)
+./scripts/kill-agent.sh --shutdown
+```
+
+### 6.3 — External Kill Switches (Not Script-Dependent)
 
 | Method | Speed | Scope |
 |---|---|---|
-| `ssh openclaw@clawpi.local 'systemctl --user stop openclaw'` | Instant | Stops the agent, keeps Pi running |
+| `./scripts/kill-agent.sh` | Instant | Stops the agent, keeps Pi running |
 | Privacy.com: pause card from phone | Instant | Blocks all payments |
 | Twilio: suspend account from dashboard | Instant | Blocks all SMS/voice |
-| `ssh openclaw@clawpi.local 'sudo shutdown -h now'` | ~10 seconds | Full Pi shutdown |
-| Unplug the Pi | Instant | Nuclear option |
+| `./scripts/kill-agent.sh --shutdown` | ~10 seconds | Full Pi shutdown |
+| Unplug the Pi | Instant | Nuclear option, no SSH needed |
 
-### 6.4 — Weekly Review Routine
+### 6.4 — Alerts
+
+- **Privacy.com**: Transaction alerts to your real phone (already enabled in Phase 0)
+- **Twilio**: Usage alerts when approaching limits
+- **HEARTBEAT.md**: The agent reports system health (temp, disk) every 30 min via Telegram
+
+### 6.5 — Weekly Review Routine
 
 ```
-[ ] Check ~/.openclaw/ logs — what did the agent do?
+[ ] Run ./scripts/backup-logs.sh and review what the agent did
 [ ] Review Privacy.com transaction history
 [ ] Review Twilio usage log
 [ ] Check for OpenClaw updates / security advisories
 [ ] Rotate API keys if anything looks off
+[ ] Check SOUL.md and MEMORY.md for unexpected changes
 ```
 
 ---
@@ -408,19 +451,23 @@ The Pi itself costs nothing to run (< $5/year electricity).
 
 ```
 openclaw-pi-sandbox/
-├── README.md              ← this file (setup plan)
+├── README.md                ← this file (full setup plan)
 ├── config/
-│   ├── gateway.yaml       ← OpenClaw gateway config (loopback-only)
-│   ├── workspace.yaml     ← Agent permissions and tool restrictions
-│   └── skills.yaml        ← Vetted skill allowlist
+│   ├── SOUL.md              ← agent personality and boundaries (→ workspace)
+│   ├── HEARTBEAT.md         ← proactive check list (→ workspace)
+│   ├── AGENTS.md            ← operating contract and safety rules (→ workspace)
+│   ├── USER.md              ← about you — fill in your details (→ workspace)
+│   └── TOOLS.md             ← enabled/disabled tools and rate limits (→ workspace)
 ├── scripts/
-│   ├── harden-pi.sh       ← OS hardening automation
-│   ├── install-openclaw.sh← Automated install
-│   ├── backup-logs.sh     ← Log sync to laptop
-│   └── kill-agent.sh      ← Emergency stop
+│   ├── harden-pi.sh         ← OS hardening (run as pi user)
+│   ├── install-openclaw.sh  ← OpenClaw install + config copy (run as openclaw user)
+│   ├── backup-logs.sh       ← sync logs to your laptop (run on laptop)
+│   └── kill-agent.sh        ← emergency stop (run on laptop)
 └── docs/
-    └── account-setup.md   ← Detailed account creation walkthrough
+    └── account-setup.md     ← detailed account creation walkthrough (TODO)
 ```
+
+All config files in `config/` are templates. `install-openclaw.sh` copies them into the OpenClaw workspace automatically. Edit the templates before running the install, or edit in-place after.
 
 ---
 
