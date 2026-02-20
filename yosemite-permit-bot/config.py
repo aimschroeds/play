@@ -20,10 +20,12 @@ BEFORE RUNNING:
 PERMIT_URL = (
     "https://www.recreation.gov/permits/445859/registration/detailed-availability"
     "?date=2026-08-01"
+    "&type=overnight-permit"
 )
 PERMIT_URL_TEMPLATE = (
     "https://www.recreation.gov/permits/445859/registration/detailed-availability"
     "?date={date}"
+    "&type=overnight-permit"
 )
 
 # ── CDP endpoint for the already-running Chrome browser ────────────────────────
