@@ -109,10 +109,20 @@ async def wait_until_launch_window(page: Page) -> None:
             await asyncio.sleep(min(secs - 60, 300))
             log(f"  {seconds_until_launch() / 60:.1f} min remaining …")
 
-    # Pre-position on the permit page so we are ready to act at exactly 9:00
+    # Pre-position: load the page and navigate the grid to the target date window
+    # so that at launch time we only need to click a cell (no 30+ Next-clicks).
     log("Pre-positioning on permit page …")
     await page.goto(PERMIT_URL, wait_until="domcontentloaded")
     await human_delay(DELAY_AFTER_NAVIGATION)
+    try:
+        await page.locator(SELECTORS["availability_grid"]).first.wait_for(
+            state="visible", timeout=20000
+        )
+    except Exception:
+        pass
+    log("Pre-navigating grid to start date (this may take ~30 s) …")
+    await navigate_to_start_date(page, START_DATE)
+    log("Grid pre-positioned. Waiting for launch time …")
 
     # Burn the last few seconds
     remaining = seconds_until_launch() + LAUNCH_SECONDS_EARLY  # time to actual 9:00
@@ -185,15 +195,16 @@ async def navigate_to_start_date(page: Page, date_str: str) -> None:
     Ensure the availability grid is showing the window that contains date_str
     (YYYY-MM-DD).
 
-    Recreation.gov sometimes ignores the ?date= URL parameter.  Strategy:
+    Recreation.gov ignores the ?date= URL parameter.  Strategy:
 
     1. Read the first column header to check the currently-displayed date.
-    2. If already >= target, do nothing.
-    3. Navigate to PERMIT_URL_TEMPLATE with the target date (URL fast path).
-    4. If the grid still shows the wrong date, click "Next 5 Days" repeatedly
-       (capped at 60 clicks ≈ 300 days).
+    2. If the target date already falls within the current 5-day window, done.
+    3. If we've overshot (grid is AFTER the target), click Prev to go back.
+    4. Otherwise click "Next 5 Days" until the window contains the target
+       (capped at 60 clicks ≈ 300 days forward).
     """
     target_dt = datetime.strptime(date_str, "%Y-%m-%d")
+    WINDOW = timedelta(days=5)  # recreation.gov advances 5 days per click
 
     # ── Helper: read the first visible column date from the grid header ───────
     async def current_grid_date():
@@ -202,57 +213,49 @@ async def navigate_to_start_date(page: Page, date_str: str) -> None:
             if await headers.count() == 0:
                 return None
             text = await headers.first.inner_text(timeout=2000)
-            # "Monday, August 1, 2026"
+            # e.g. "Monday, August 1, 2026"
             return datetime.strptime(text.strip(), "%A, %B %d, %Y")
         except Exception:
             return None
 
+    def in_window(cur):
+        """True if target_dt is visible in the window starting at cur."""
+        return cur is not None and cur <= target_dt < cur + WINDOW
+
     cur = await current_grid_date()
-    if cur is not None and cur >= target_dt:
-        log(f"  Grid already at {cur.strftime('%Y-%m-%d')} — no date navigation needed.")
+    if in_window(cur):
+        log(f"  Grid already shows window starting {cur.strftime('%Y-%m-%d')} — target {date_str} is visible.")
         return
 
     log(f"  Grid date is {cur.strftime('%Y-%m-%d') if cur else 'unknown'}; "
-        f"need to reach {date_str} …")
+        f"need window containing {date_str} …")
 
-    # ── Fast path: navigate to the dated URL ──────────────────────────────────
-    dated_url = PERMIT_URL_TEMPLATE.format(date=date_str)
-    log(f"  Navigating to dated URL: {dated_url}")
-    await page.goto(dated_url, wait_until="domcontentloaded")
-    await human_delay(DELAY_AFTER_NAVIGATION)
-    try:
-        await page.locator(SELECTORS["availability_grid"]).first.wait_for(
-            state="visible", timeout=20000
-        )
-    except Exception:
-        pass
-
-    cur = await current_grid_date()
-    if cur is not None and cur >= target_dt:
-        log(f"  ✓ Grid now at {cur.strftime('%Y-%m-%d')} via URL navigation.")
-        return
-
-    log(f"  URL navigation landed at {cur.strftime('%Y-%m-%d') if cur else 'unknown'}; "
-        "falling back to Next-button clicks …")
-
-    # ── Slow path: click "Next 5 Days" until we reach or pass the target ─────
-    MAX_NEXT_CLICKS = 60  # 60 × 5 = 300 days max
-    for i in range(MAX_NEXT_CLICKS):
+    # ── Slow path: click Next/Prev until the target is in the window ──────────
+    MAX_CLICKS = 60  # safety cap
+    for i in range(MAX_CLICKS):
         cur = await current_grid_date()
-        if cur is not None and cur >= target_dt:
-            log(f"  ✓ Grid now at {cur.strftime('%Y-%m-%d')} after {i} Next clicks.")
+        if in_window(cur):
+            log(f"  ✓ Grid window starts {cur.strftime('%Y-%m-%d')} after {i} clicks — {date_str} is visible.")
             return
+
+        # Decide direction
+        if cur is not None and cur > target_dt:
+            # Overshot — go back
+            btn_key = "grid_prev_button"
+        else:
+            btn_key = "grid_next_button"
+
         try:
-            next_btn = page.locator(SELECTORS["grid_next_button"]).first
-            await next_btn.wait_for(state="visible", timeout=5000)
-            await human_click(page, next_btn)
+            btn = page.locator(SELECTORS[btn_key]).first
+            await btn.wait_for(state="visible", timeout=5000)
+            await human_click(page, btn)
             await human_delay((0.5, 1.0))
         except Exception as e:
-            log(f"  Warning: could not click Next ({e}); stopping date navigation.")
+            log(f"  Warning: could not click nav button ({e}); stopping.")
             break
 
     cur = await current_grid_date()
-    log(f"  Date navigation complete — grid is at "
+    log(f"  Date navigation done — grid is at "
         f"{cur.strftime('%Y-%m-%d') if cur else 'unknown'}.")
 
 
@@ -329,22 +332,23 @@ async def scan_and_book(page: Page) -> bool:
 
     Returns True if a cell was clicked and "Book Now" was hit successfully.
     """
-    # Navigate to the start of the date range
-    log(f"Navigating to permit page: {PERMIT_URL}")
-    await page.goto(PERMIT_URL, wait_until="domcontentloaded")
-    await human_delay(DELAY_AFTER_NAVIGATION)
+    # If pre-positioned by wait_until_launch_window the grid is already at the
+    # right date — skip re-navigation (which would reset to today's date).
+    # Only navigate fresh if we're not on the permit page at all.
+    if "445859" not in page.url:
+        log(f"Navigating to permit page: {PERMIT_URL}")
+        await page.goto(PERMIT_URL, wait_until="domcontentloaded")
+        await human_delay(DELAY_AFTER_NAVIGATION)
+        log("Waiting for availability grid …")
+        try:
+            await page.locator(SELECTORS["availability_grid"]).first.wait_for(
+                state="visible", timeout=20000
+            )
+            log("  Grid is visible.")
+        except Exception:
+            log("  Warning: availability grid did not appear in time — continuing anyway")
 
-    # Wait for the availability grid to appear
-    log("Waiting for availability grid …")
-    try:
-        await page.locator(SELECTORS["availability_grid"]).first.wait_for(
-            state="visible", timeout=20000
-        )
-        log("  Grid is visible.")
-    except Exception:
-        log("  Warning: availability grid did not appear in time — continuing anyway")
-
-    # Navigate to the configured start date (recreation.gov ignores ?date= in the URL)
+    # Ensure grid is at the target date window (no-op if already there)
     await navigate_to_start_date(page, START_DATE)
 
     # Set group size
