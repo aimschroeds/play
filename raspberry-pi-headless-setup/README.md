@@ -1,6 +1,6 @@
-# Raspberry Pi Headless Setup Guide
+# Raspberry Pi Headless Setup (CLI Only)
 
-Use your Raspberry Pi without a monitor, keyboard, or mouse.
+Set up and use your Raspberry Pi without a monitor — entirely from the command line.
 
 ## What You Need
 
@@ -9,78 +9,74 @@ Use your Raspberry Pi without a monitor, keyboard, or mouse.
 - Power supply for your Pi
 - Another computer on the same network
 
-## Method 1: Raspberry Pi Imager (Recommended)
-
-The easiest way. Raspberry Pi Imager lets you pre-configure SSH, Wi-Fi, and
-user credentials before the first boot.
-
-### 1. Flash the SD Card
-
-1. Download and install [Raspberry Pi Imager](https://www.raspberrypi.com/software/)
-2. Select your Pi model and OS (Raspberry Pi OS Lite for headless, or full if you want VNC later)
-3. Click the **gear icon** (or `Ctrl+Shift+X`) to open **OS Customization**:
-
-| Setting              | Value                              |
-|----------------------|------------------------------------|
-| Hostname             | `raspberrypi` (or your choice)     |
-| Enable SSH           | ✅ Use password authentication     |
-| Set username/password| Pick something you'll remember     |
-| Configure Wi-Fi      | Your network SSID and password     |
-| Wi-Fi country        | Your country code (e.g. US, GB)    |
-
-4. Write to the SD card
-
-### 2. Boot the Pi
-
-1. Insert the SD card into the Pi
-2. Connect power (and Ethernet if not using Wi-Fi)
-3. Wait ~60–90 seconds for the first boot
-
-### 3. Connect via SSH
-
-From a terminal on your other computer:
+## Step 1: Download the OS Image
 
 ```bash
-ssh <username>@raspberrypi.local
+# Find the latest Raspberry Pi OS Lite image URL
+# https://www.raspberrypi.com/software/operating-systems/
+
+# Download (example — check site for current URL)
+curl -L -o raspios.img.xz https://downloads.raspberrypi.com/raspios_lite_arm64/images/raspios_lite_arm64-2024-11-19/2024-11-19-raspios-bookworm-arm64-lite.img.xz
+
+# Extract
+xz -d raspios.img.xz
 ```
 
-If `.local` doesn't resolve, find the Pi's IP address from your router's admin
-page or use:
+## Step 2: Flash the SD Card
 
 ```bash
-# Linux/macOS
-ping raspberrypi.local
+# Find your SD card device
+lsblk                          # Linux
+diskutil list                  # macOS
 
-# Or scan the network (requires nmap)
-nmap -sn 192.168.1.0/24
+# ⚠️  Double-check the device name — writing to the wrong disk will destroy data
+
+# Unmount the SD card
+sudo umount /dev/sdX*          # Linux (replace sdX with your device)
+diskutil unmountDisk /dev/diskN # macOS (replace diskN with your device)
+
+# Write the image
+sudo dd if=raspios.img of=/dev/sdX bs=4M status=progress  # Linux
+sudo dd if=raspios.img of=/dev/rdiskN bs=4m               # macOS (rdisk is faster)
+
+# Flush writes
+sync
 ```
 
-Then connect with the IP directly:
+## Step 3: Configure the Boot Partition
+
+After flashing, mount the boot partition of the SD card. It usually auto-mounts
+as `bootfs`.
 
 ```bash
-ssh <username>@192.168.1.XXX
+# Find where it mounted
+lsblk       # Linux — look for the smaller partition (usually ~512 MB)
+# Typically: /media/$USER/bootfs (Linux) or /Volumes/bootfs (macOS)
+
+BOOT=/media/$USER/bootfs       # Linux — adjust if needed
+# BOOT=/Volumes/bootfs         # macOS
 ```
-
-## Method 2: Manual Configuration (No Imager)
-
-If you flashed the OS another way, you can enable SSH and Wi-Fi by placing
-files on the boot partition of the SD card before the first boot.
 
 ### Enable SSH
 
-Create an empty file named `ssh` (no extension) in the boot partition:
+```bash
+touch "$BOOT/ssh"
+```
+
+### Set Username and Password
 
 ```bash
-touch /Volumes/bootfs/ssh        # macOS
-touch /media/$USER/bootfs/ssh    # Linux
-# On Windows, create an empty file named "ssh" in the boot drive
+# Generate an encrypted password
+PASSWORD=$(echo 'YOUR_PASSWORD_HERE' | openssl passwd -6 -stdin)
+
+# Write the user config (replace 'pi' with your preferred username)
+echo "pi:$PASSWORD" > "$BOOT/userconf.txt"
 ```
 
 ### Configure Wi-Fi
 
-Create a file named `wpa_supplicant.conf` in the boot partition:
-
-```
+```bash
+cat > "$BOOT/wpa_supplicant.conf" << 'EOF'
 country=US
 ctrl_interface=DIR=/var/run/wpa_supplicant GROUP=netdev
 update_config=1
@@ -90,91 +86,101 @@ network={
     psk="YOUR_WIFI_PASSWORD"
     key_mgmt=WPA-PSK
 }
+EOF
 ```
 
-### Set Username and Password
+> Replace `US` with your country code, and fill in your Wi-Fi SSID and password.
 
-Create a file named `userconf.txt` in the boot partition containing:
-
-```
-username:encrypted-password
-```
-
-Generate the encrypted password on another Linux machine:
+### Unmount
 
 ```bash
-echo 'mypassword' | openssl passwd -6 -stdin
+sudo umount "$BOOT"
+# macOS: diskutil unmountDisk /dev/diskN
 ```
 
-Then your `userconf.txt` would look like:
+## Step 4: Boot and Find the Pi
 
-```
-pi:$6$xyz...your_hash_here
-```
-
-## Enabling VNC (Remote Desktop)
-
-Once connected via SSH, enable VNC for full graphical access:
+Insert the SD card, power on the Pi, and wait ~60–90 seconds.
 
 ```bash
-sudo raspi-config
-# Navigate to: Interface Options → VNC → Enable
+# Option 1: mDNS (if avahi/bonjour is available)
+ping -c 3 raspberrypi.local
+
+# Option 2: Scan your local network (requires nmap)
+nmap -sn 192.168.1.0/24
+
+# Option 3: Check your router's DHCP lease table
+# (varies by router — usually accessible at 192.168.1.1 in a browser)
+
+# Option 4: ARP scan (requires arp-scan)
+sudo arp-scan --localnet
 ```
 
-Then install [RealVNC Viewer](https://www.realvnc.com/en/connect/download/viewer/)
-on your computer and connect to `raspberrypi.local`.
-
-> **Note:** VNC requires Raspberry Pi OS with Desktop, not the Lite version.
-> If you installed Lite, you can add a desktop with:
-> ```bash
-> sudo apt update && sudo apt install -y raspberrypi-ui-mods
-> sudo reboot
-> ```
-
-## Useful Commands Once Connected
+## Step 5: Connect via SSH
 
 ```bash
-# Check Pi model and OS
-cat /proc/device-tree/model
-cat /etc/os-release
+ssh pi@raspberrypi.local
+# Or use the IP address you found:
+# ssh pi@192.168.1.XXX
+```
 
-# Check network
-hostname -I
-iwconfig
+Accept the host key fingerprint on first connection, then enter your password.
 
-# Update the system
+## Step 6: Initial Setup on the Pi
+
+Once connected, run these to get your Pi up to date:
+
+```bash
+# Update packages
 sudo apt update && sudo apt full-upgrade -y
 
-# Check temperature
-vcgencmd measure_temp
+# Set timezone
+sudo timedatectl set-timezone America/New_York   # adjust to your timezone
 
-# Safely shut down
-sudo shutdown -h now
+# Set hostname (optional)
+sudo hostnamectl set-hostname mypi
+```
 
-# Reboot
-sudo reboot
+## SSH Key Setup (Skip the Password)
+
+On your local machine:
+
+```bash
+# Generate a key if you don't have one
+ssh-keygen -t ed25519
+
+# Copy it to the Pi
+ssh-copy-id pi@raspberrypi.local
+```
+
+Now `ssh pi@raspberrypi.local` connects without a password prompt.
+
+## Useful Commands
+
+```bash
+# System info
+cat /proc/device-tree/model        # Pi model
+cat /etc/os-release                # OS version
+vcgencmd measure_temp              # CPU temperature
+free -h                            # Memory usage
+df -h                              # Disk usage
+
+# Networking
+hostname -I                        # IP address
+iwconfig                           # Wi-Fi status
+nmcli dev wifi list                # Available Wi-Fi networks (bookworm+)
+
+# Power
+sudo shutdown -h now               # Shut down
+sudo reboot                        # Reboot
 ```
 
 ## Troubleshooting
 
-| Problem | Solution |
+| Problem | Fix |
 |---|---|
-| Can't find Pi on network | Check Wi-Fi credentials; try Ethernet; check router DHCP leases |
-| `ssh: connect to host raspberrypi.local port 22: Connection refused` | SSH not enabled — re-flash with Imager or add `ssh` file to boot partition |
-| `.local` hostname doesn't resolve | Install Bonjour (Windows) or avahi (Linux): `sudo apt install avahi-daemon` |
-| SSH works but VNC shows grey screen | Set a screen resolution: `sudo raspi-config` → Display Options → Resolution |
-| Permission denied (publickey) | Use password auth: `ssh -o PreferredAuthentications=password user@host` |
-
-## SSH Key Setup (Optional, More Secure)
-
-To skip typing your password every time:
-
-```bash
-# On your computer — generate a key if you don't have one
-ssh-keygen -t ed25519
-
-# Copy your public key to the Pi
-ssh-copy-id <username>@raspberrypi.local
-```
-
-Now `ssh <username>@raspberrypi.local` will connect without a password.
+| Can't find Pi on network | Double-check Wi-Fi creds in `wpa_supplicant.conf`; try Ethernet instead |
+| `Connection refused` on port 22 | The `ssh` file is missing from boot partition — re-mount and add it |
+| `raspberrypi.local` doesn't resolve | Use IP instead; install avahi on Pi later: `sudo apt install avahi-daemon` |
+| `Permission denied` | Check username in `userconf.txt`; try: `ssh -o PreferredAuthentications=password pi@host` |
+| Wi-Fi connects then drops | Check power supply — undervoltage causes Wi-Fi instability |
