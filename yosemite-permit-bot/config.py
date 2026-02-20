@@ -99,27 +99,33 @@ SELECTORS = {
 
     # ── Date picker input and calendar ───────────────────────────────────────
     # Recreation.gov ignores the ?date= URL parameter at runtime and resets the
-    # grid to today's date.  We open the calendar by clicking the date input,
-    # navigate months with the < / > buttons, then click the target day.
-    # Much faster than clicking "Next 5 Days" ~33 times to reach Aug from today.
-    "date_input": 'input[aria-label="Start Date"]',
+    # grid to today's date.  We open the calendar by clicking the calendar icon
+    # toggle button, navigate months with the < / > buttons, then click the
+    # target day.  Much faster than clicking "Next 5 Days" ~33 times.
+    #
+    # DOM structure (from live recreation.gov):
+    #   <button id="single-date-toggle" aria-label="Calendar"
+    #           aria-haspopup="dialog" class="toggle-calendar-button">
+    #   <h2 data-component="Heading" class="heading h5-normal">August 2026</h2>
+    #   <button class="next-prev-button" aria-label="Previous">…</button>
+    #   <button class="next-prev-button" aria-label="Next">…</button>
+    #   <div role="button" class="calendar-cell" aria-label="Saturday, 1 August 2026">1</div>
+    #   <div role="button" class="calendar-cell is-disabled" aria-disabled="true">…</div>
+    "date_input": 'button#single-date-toggle',
 
     # Month/year heading inside the open calendar popup.
     # Shows text like "August 2026".
-    "date_picker_month_header": 'div[class*="caption-label"]',
+    "date_picker_month_header": 'h2[data-component="Heading"]',
 
     # Month-navigation arrow buttons flanking the month header.
-    "date_picker_prev_month": 'button[aria-label="Go to previous month"]',
-    "date_picker_next_month": 'button[aria-label="Go to next month"]',
+    "date_picker_prev_month": 'button.next-prev-button[aria-label="Previous"]',
+    "date_picker_next_month": 'button.next-prev-button[aria-label="Next"]',
 
-    # All enabled, in-month day cells.
-    # We use a regex exact-match in the code to avoid "1" matching "10", "21" etc.
-    "date_picker_day": (
-        'button[class*="day"]'
-        ':not([class*="outside"])'
-        ':not([class*="disabled"])'
-        ':not([disabled])'
-    ),
+    # All enabled, in-month day cells (div[role="button"], not <button>).
+    # Disabled cells (adjacent months) have class "is-disabled"; exclude them.
+    # In the code we match by aria-label substring ", {day} {Month} {year}" to
+    # avoid ambiguity (e.g. ", 1 August 2026" won't match "11 August 2026").
+    "date_picker_day": 'div[role="button"].calendar-cell:not(.is-disabled)',
 
     # ── Grid column header (used to read the currently-displayed start date) ──
     # The first column header contains a screen-reader-only span with the full
