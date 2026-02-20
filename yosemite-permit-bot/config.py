@@ -97,8 +97,9 @@ SELECTORS = {
     # ── Book Now button ───────────────────────────────────────────────────────
     "book_now_button": 'button.sarsa-button-primary:has-text("Book Now")',
 
-    # ── Date picker input and calendar ───────────────────────────────────────
+    # ── Date picker input ─────────────────────────────────────────────────────
     # Recreation.gov ignores the ?date= URL parameter at runtime and resets the
+<<<<<<< Updated upstream
     # grid to today's date.  We open the calendar by clicking the calendar icon
     # toggle button, navigate months with the < / > buttons, then click the
     # target day.  Much faster than clicking "Next 5 Days" ~33 times.
@@ -127,6 +128,12 @@ SELECTORS = {
     # avoid ambiguity (e.g. ", 1 August 2026" won't match "11 August 2026").
     "date_picker_day": 'div[role="button"].calendar-cell:not(.is-disabled)',
 
+=======
+    # grid to today's date.  We interact with the date picker directly instead.
+    # Accepts MM/DD/YYYY input.
+    "date_input": 'input[aria-label="Start Date"]',
+
+>>>>>>> Stashed changes
     # ── Grid column header (used to read the currently-displayed start date) ──
     # The first column header contains a screen-reader-only span with the full
     # date: "Monday, August 1, 2026".  We use this to check whether the grid
