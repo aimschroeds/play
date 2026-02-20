@@ -118,7 +118,13 @@ SELECTORS = {
     #
     # available_cell_in_row: we do NOT filter by a parent CSS class (.available)
     # because Yosemite uses multiple states for bookable cells (.available,
-    # .walk-up, …).  We rely solely on the button being enabled (:not(:disabled)).
+    # .walk-up, …).  We rely on the button being enabled and exclude NR cells
+    # (Not Released) whose aria-label says "not yet released" — clicking those
+    # opens a modal and blocks checkout.
     "trailhead_row_template": '[role="row"]:has(button[aria-label="{trailhead}"])',
-    "available_cell_in_row": 'button.rec-availability-date:not(:disabled)',
+    "available_cell_in_row": (
+        'button.rec-availability-date'
+        ':not(:disabled)'
+        ':not([aria-label*="not yet released"])'
+    ),
 }
