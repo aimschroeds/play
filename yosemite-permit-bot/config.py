@@ -61,8 +61,8 @@ MAX_DATE_WINDOWS = 2
 
 # ── Timing / human-simulation ──────────────────────────────────────────────────
 # All delay values are in seconds.
-DELAY_BETWEEN_ACTIONS = (0.4, 1.2)   # (min, max) uniform random delay
-DELAY_AFTER_NAVIGATION = (1.5, 3.0)  # wait for page to settle after nav
+DELAY_BETWEEN_ACTIONS = (0.1, 0.6)   # (min, max) uniform random delay
+DELAY_AFTER_NAVIGATION = (0.5, 1.0)  # wait for page to settle after nav
 DELAY_BEFORE_RETRY = 2.0             # pause between quota-check retries
 MAX_QUOTA_RETRIES = 30               # how many times to retry if no quota shown yet
 
@@ -99,7 +99,6 @@ SELECTORS = {
 
     # ── Date picker input ─────────────────────────────────────────────────────
     # Recreation.gov ignores the ?date= URL parameter at runtime and resets the
-<<<<<<< Updated upstream
     # grid to today's date.  We open the calendar by clicking the calendar icon
     # toggle button, navigate months with the < / > buttons, then click the
     # target day.  Much faster than clicking "Next 5 Days" ~33 times.
@@ -128,12 +127,6 @@ SELECTORS = {
     # avoid ambiguity (e.g. ", 1 August 2026" won't match "11 August 2026").
     "date_picker_day": 'div[role="button"].calendar-cell:not(.is-disabled)',
 
-=======
-    # grid to today's date.  We interact with the date picker directly instead.
-    # Accepts MM/DD/YYYY input.
-    "date_input": 'input[aria-label="Start Date"]',
-
->>>>>>> Stashed changes
     # ── Grid column header (used to read the currently-displayed start date) ──
     # The first column header contains a screen-reader-only span with the full
     # date: "Monday, August 1, 2026".  We use this to check whether the grid
