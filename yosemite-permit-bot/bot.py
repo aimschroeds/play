@@ -10,20 +10,24 @@ See config.py for all settings and the Chrome launch instructions.
 Flow
 ────
 1. Wait until 9:00 AM PT (or run immediately with --now).
-2. Navigate to the detailed-availability grid.
-3. Set group size to NUM_PEOPLE.
-4. Scan up to MAX_DATE_WINDOWS × 5-day windows:
+2. Reload the permit page — cells are NR (Not Released) until 9 AM, so a
+   hard reload is required to reveal the newly-available slots.
+3. Use the calendar date picker to jump to START_DATE in ~6 clicks (much
+   faster than clicking "Next 5 Days" ~33 times from today).
+4. Set group size to NUM_PEOPLE.
+5. Scan up to MAX_DATE_WINDOWS × 5-day windows:
    a. For each trailhead in TRAILHEAD_PRIORITY:
       - Find the trailhead's row in the grid.
       - Look for an available (green) cell in that row.
       - If found: click it and proceed to Book Now.
    b. If nothing found in this window, click "Next 5 Days" and repeat.
-5. Click "Book Now" to start checkout.
-6. Leave the browser open for the user to complete payment.
+6. Click "Book Now" to start checkout.
+7. Leave the browser open for the user to complete payment.
 """
 
 import argparse
 import asyncio
+import re
 import random
 import sys
 from datetime import datetime, timedelta
@@ -96,8 +100,10 @@ def seconds_until_launch() -> float:
 
 async def wait_until_launch_window(page: Page) -> None:
     """
-    Sleep in big chunks until we are close to the launch time, then navigate
-    to the permit page and burn the remaining seconds at the top of the queue.
+    Sleep until just before 9 AM PT, load the permit page while idle, then
+    fire.  We do NOT pre-navigate the date grid here — cells are NR (Not
+    Released) until 9 AM anyway, so a full page reload is required at launch.
+    scan_and_book() handles the reload + fast date-picker jump at 9 AM.
     """
     secs = seconds_until_launch()
     if secs > 60:
@@ -109,20 +115,11 @@ async def wait_until_launch_window(page: Page) -> None:
             await asyncio.sleep(min(secs - 60, 300))
             log(f"  {seconds_until_launch() / 60:.1f} min remaining …")
 
-    # Pre-position: load the page and navigate the grid to the target date window
-    # so that at launch time we only need to click a cell (no 30+ Next-clicks).
-    log("Pre-positioning on permit page …")
+    # Load the permit page now so we are already authenticated and on-site.
+    # We will reload it at 9 AM sharp to get fresh permit availability.
+    log("Pre-loading permit page (idle until launch) …")
     await page.goto(PERMIT_URL, wait_until="domcontentloaded")
     await human_delay(DELAY_AFTER_NAVIGATION)
-    try:
-        await page.locator(SELECTORS["availability_grid"]).first.wait_for(
-            state="visible", timeout=20000
-        )
-    except Exception:
-        pass
-    log("Pre-navigating grid to start date (this may take ~30 s) …")
-    await navigate_to_start_date(page, START_DATE)
-    log("Grid pre-positioned. Waiting for launch time …")
 
     # Burn the last few seconds
     remaining = seconds_until_launch() + LAUNCH_SECONDS_EARLY  # time to actual 9:00
@@ -190,73 +187,57 @@ async def set_group_size(page: Page, n: int) -> None:
 
 # ── Core permit-selection flow ──────────────────────────────────────────────────
 
-async def navigate_to_start_date(page: Page, date_str: str) -> None:
+async def set_date_via_picker(page: Page, date_str: str) -> bool:
     """
-    Ensure the availability grid is showing the window that contains date_str
-    (YYYY-MM-DD).
+    Jump the availability grid to date_str (YYYY-MM-DD) using the calendar
+    date picker — much faster than clicking "Next 5 Days" ~33 times.
 
-    Recreation.gov ignores the ?date= URL parameter.  Strategy:
-
-    1. Read the first column header to check the currently-displayed date.
-    2. If the target date already falls within the current 5-day window, done.
-    3. If we've overshot (grid is AFTER the target), click Prev to go back.
-    4. Otherwise click "Next 5 Days" until the window contains the target
-       (capped at 60 clicks ≈ 300 days forward).
+    Steps:
+    1. Click the date input to open the calendar popup.
+    2. Navigate months (< / >) until the target month/year is shown.
+       Each click is ~0.15 s — reaching Aug 2026 from Feb 2026 takes ~6 clicks.
+    3. Click the target day button (exact match to avoid "1" hitting "10"/"21").
+    4. Wait briefly for the grid to re-render.
     """
     target_dt = datetime.strptime(date_str, "%Y-%m-%d")
-    WINDOW = timedelta(days=5)  # recreation.gov advances 5 days per click
+    log(f"  Opening date picker → {target_dt.strftime('%B %Y')}, day {target_dt.day} …")
+    try:
+        date_input = page.locator(SELECTORS["date_input"]).first
+        await date_input.wait_for(state="visible", timeout=8000)
+        await date_input.click()
+        await asyncio.sleep(0.3)
 
-    # ── Helper: read the first visible column date from the grid header ───────
-    async def current_grid_date():
-        try:
-            headers = page.locator(SELECTORS["grid_first_column_header_sr"])
-            if await headers.count() == 0:
-                return None
-            text = await headers.first.inner_text(timeout=2000)
-            # e.g. "Monday, August 1, 2026"
-            return datetime.strptime(text.strip(), "%A, %B %d, %Y")
-        except Exception:
-            return None
+        # Navigate months until we reach the target month/year
+        for _ in range(24):
+            header_el = page.locator(SELECTORS["date_picker_month_header"]).first
+            header_text = (await header_el.inner_text(timeout=2000)).strip()
+            try:
+                cur_dt = datetime.strptime(header_text, "%B %Y")
+            except ValueError:
+                log(f"    Unexpected calendar header text: '{header_text}'")
+                break
 
-    def in_window(cur):
-        """True if target_dt is visible in the window starting at cur."""
-        return cur is not None and cur <= target_dt < cur + WINDOW
+            if cur_dt.year == target_dt.year and cur_dt.month == target_dt.month:
+                break
 
-    cur = await current_grid_date()
-    if in_window(cur):
-        log(f"  Grid already shows window starting {cur.strftime('%Y-%m-%d')} — target {date_str} is visible.")
-        return
+            go_next = (cur_dt.year, cur_dt.month) < (target_dt.year, target_dt.month)
+            btn_key = "date_picker_next_month" if go_next else "date_picker_prev_month"
+            await page.locator(SELECTORS[btn_key]).first.click()
+            await asyncio.sleep(0.15)  # calendar re-renders fast; keep it tight
 
-    log(f"  Grid date is {cur.strftime('%Y-%m-%d') if cur else 'unknown'}; "
-        f"need window containing {date_str} …")
+        # Click the exact day — use regex to avoid "1" matching "10", "21", etc.
+        day_btn = page.locator(SELECTORS["date_picker_day"]).filter(
+            has_text=re.compile(rf"^\s*{target_dt.day}\s*$")
+        ).first
+        await day_btn.wait_for(state="visible", timeout=3000)
+        await day_btn.click()
+        await asyncio.sleep(0.4)  # wait for grid to re-render with new date window
+        log(f"  ✓ Date picker set to {date_str}")
+        return True
 
-    # ── Slow path: click Next/Prev until the target is in the window ──────────
-    MAX_CLICKS = 60  # safety cap
-    for i in range(MAX_CLICKS):
-        cur = await current_grid_date()
-        if in_window(cur):
-            log(f"  ✓ Grid window starts {cur.strftime('%Y-%m-%d')} after {i} clicks — {date_str} is visible.")
-            return
-
-        # Decide direction
-        if cur is not None and cur > target_dt:
-            # Overshot — go back
-            btn_key = "grid_prev_button"
-        else:
-            btn_key = "grid_next_button"
-
-        try:
-            btn = page.locator(SELECTORS[btn_key]).first
-            await btn.wait_for(state="visible", timeout=5000)
-            await human_click(page, btn)
-            await human_delay((0.5, 1.0))
-        except Exception as e:
-            log(f"  Warning: could not click nav button ({e}); stopping.")
-            break
-
-    cur = await current_grid_date()
-    log(f"  Date navigation done — grid is at "
-        f"{cur.strftime('%Y-%m-%d') if cur else 'unknown'}.")
+    except Exception as e:
+        log(f"  Warning: date picker navigation failed: {e}")
+        return False
 
 
 async def find_available_cell_in_window(page: Page, trailhead: str):
@@ -327,33 +308,37 @@ async def click_book_now(page: Page) -> bool:
 
 async def scan_and_book(page: Page) -> bool:
     """
-    Navigate to the permit page and scan up to MAX_DATE_WINDOWS 5-day windows
-    for an available permit at one of the priority trailheads.
+    Reload the permit page (to reveal cells that just flipped from NR→Available
+    at 9 AM), jump to START_DATE via the calendar picker, set group size, then
+    scan up to MAX_DATE_WINDOWS 5-day windows for an available permit.
 
     Returns True if a cell was clicked and "Book Now" was hit successfully.
     """
-    # If pre-positioned by wait_until_launch_window the grid is already at the
-    # right date — skip re-navigation (which would reset to today's date).
-    # Only navigate fresh if we're not on the permit page at all.
-    if "445859" not in page.url:
+    # ── Reload to get fresh 9 AM availability ─────────────────────────────────
+    # Cells show as "Not Released" until 9 AM.  A reload is required to see them
+    # flip to Available — a stale pre-loaded page won't show them.
+    if "445859" in page.url:
+        log("Reloading permit page to reveal newly-released permits …")
+        await page.reload(wait_until="domcontentloaded")
+    else:
         log(f"Navigating to permit page: {PERMIT_URL}")
         await page.goto(PERMIT_URL, wait_until="domcontentloaded")
-        await human_delay(DELAY_AFTER_NAVIGATION)
-        log("Waiting for availability grid …")
-        try:
-            await page.locator(SELECTORS["availability_grid"]).first.wait_for(
-                state="visible", timeout=20000
-            )
-            log("  Grid is visible.")
-        except Exception:
-            log("  Warning: availability grid did not appear in time — continuing anyway")
 
-    # Ensure grid is at the target date window (no-op if already there)
-    await navigate_to_start_date(page, START_DATE)
+    log("Waiting for availability grid …")
+    try:
+        await page.locator(SELECTORS["availability_grid"]).first.wait_for(
+            state="visible", timeout=20000
+        )
+        log("  Grid is visible.")
+    except Exception:
+        log("  Warning: availability grid did not appear in time — continuing anyway")
 
-    # Set group size
+    # ── Jump to target date via calendar picker (fast: ~6 clicks) ─────────────
+    await set_date_via_picker(page, START_DATE)
+
+    # ── Set group size ─────────────────────────────────────────────────────────
     await set_group_size(page, NUM_PEOPLE)
-    await human_delay(DELAY_AFTER_NAVIGATION)
+    await asyncio.sleep(0.5)  # brief settle — keep it tight
 
     clicked_cell = False
 
@@ -364,28 +349,27 @@ async def scan_and_book(page: Page) -> bool:
             log(f"  Checking trailhead: '{trailhead}' …")
             cell = await find_available_cell_in_window(page, trailhead)
             if cell is not None:
-                # Try to read the cell's aria-label for logging
                 try:
                     label = await cell.get_attribute("aria-label") or "(unknown date)"
                 except Exception:
                     label = "(unknown date)"
                 log(f"  ✓ Available cell found — trailhead='{trailhead}', cell='{label}'")
                 await human_click(page, cell)
-                await human_delay(DELAY_AFTER_NAVIGATION)
+                await asyncio.sleep(0.4)  # brief settle before Book Now
                 clicked_cell = True
                 break
 
         if clicked_cell:
             break
 
-        # No availability found in this window — advance to next 5-day window
+        # No availability in this window — advance to next 5-day window
         if window_idx < MAX_DATE_WINDOWS - 1:
             log("  No availability in this window — advancing to next 5 days …")
             try:
                 next_btn = page.locator(SELECTORS["grid_next_button"]).first
                 await next_btn.wait_for(state="visible", timeout=5000)
                 await human_click(page, next_btn)
-                await human_delay(DELAY_AFTER_NAVIGATION)
+                await asyncio.sleep(0.5)
             except Exception as e:
                 log(f"  Warning: could not click 'Next' button: {e}")
                 break
@@ -394,7 +378,6 @@ async def scan_and_book(page: Page) -> bool:
         log("✗ No available permit found in the scanned date windows.")
         return False
 
-    # Click Book Now to proceed to checkout
     booked = await click_book_now(page)
     return booked
 

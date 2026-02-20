@@ -97,11 +97,29 @@ SELECTORS = {
     # ── Book Now button ───────────────────────────────────────────────────────
     "book_now_button": 'button.sarsa-button-primary:has-text("Book Now")',
 
-    # ── Date picker input ─────────────────────────────────────────────────────
+    # ── Date picker input and calendar ───────────────────────────────────────
     # Recreation.gov ignores the ?date= URL parameter at runtime and resets the
-    # grid to today's date.  We interact with the date picker directly instead.
-    # Accepts MM/DD/YYYY input.
+    # grid to today's date.  We open the calendar by clicking the date input,
+    # navigate months with the < / > buttons, then click the target day.
+    # Much faster than clicking "Next 5 Days" ~33 times to reach Aug from today.
     "date_input": 'input[aria-label="Start Date"]',
+
+    # Month/year heading inside the open calendar popup.
+    # Shows text like "August 2026".
+    "date_picker_month_header": 'div[class*="caption-label"]',
+
+    # Month-navigation arrow buttons flanking the month header.
+    "date_picker_prev_month": 'button[aria-label="Go to previous month"]',
+    "date_picker_next_month": 'button[aria-label="Go to next month"]',
+
+    # All enabled, in-month day cells.
+    # We use a regex exact-match in the code to avoid "1" matching "10", "21" etc.
+    "date_picker_day": (
+        'button[class*="day"]'
+        ':not([class*="outside"])'
+        ':not([class*="disabled"])'
+        ':not([disabled])'
+    ),
 
     # ── Grid column header (used to read the currently-displayed start date) ──
     # The first column header contains a screen-reader-only span with the full
