@@ -4,10 +4,23 @@ Set up and use your Raspberry Pi without a monitor — entirely from the command
 
 ## What You Need
 
-- Raspberry Pi (any model with networking)
-- microSD card (16 GB+)
-- Power supply for your Pi
-- Another computer on the same network
+### Hardware
+
+| Item | Notes |
+|---|---|
+| Raspberry Pi | Any model with networking (Wi-Fi or Ethernet) |
+| microSD card | 16 GB minimum, 32 GB recommended. Class 10 / A1 or faster |
+| microSD card reader | USB adapter or built-in laptop slot. A microSD-to-SD adapter (often included with the card) works for full-size SD slots |
+| USB-C power supply | 5V/3A for Pi 4 and 5. Older models use micro-USB (5V/2.5A). Using an underpowered supply causes random crashes and Wi-Fi drops |
+| Ethernet cable (optional) | Simplifies setup — skip the Wi-Fi config step entirely |
+
+### On Your Computer
+
+- Another computer on the same network (Linux or macOS; Windows works but commands differ)
+- `curl` and `xz` for downloading/extracting the image
+- `dd` for flashing (pre-installed on Linux/macOS)
+- `openssl` for generating the password hash (pre-installed on most systems)
+- `nmap` or `arp-scan` (optional, for finding the Pi on your network)
 
 ## Step 1: Download the OS Image
 
