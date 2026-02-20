@@ -34,6 +34,7 @@ from playwright.async_api import async_playwright, Page, BrowserContext
 from config import (
     CDP_ENDPOINT,
     PERMIT_URL,
+    START_DATE,
     LAUNCH_TZ,
     LAUNCH_HOUR,
     LAUNCH_MINUTE,
@@ -178,6 +179,85 @@ async def set_group_size(page: Page, n: int) -> None:
 
 # ── Core permit-selection flow ──────────────────────────────────────────────────
 
+async def navigate_to_start_date(page: Page, date_str: str) -> None:
+    """
+    Ensure the availability grid is showing the window that contains date_str
+    (YYYY-MM-DD).
+
+    Recreation.gov ignores the ?date= URL parameter at runtime and resets the
+    grid to today's date.  Strategy:
+
+    1. Read the first column header to get the currently-displayed start date.
+    2. If it's already >= our target, do nothing.
+    3. Try the date picker input (fast path: one interaction).
+    4. If that fails, click "Next 5 Days" repeatedly until we overshoot
+       or reach the target (slow path, capped at 60 clicks ≈ 300 days).
+    """
+    from datetime import datetime as _dt
+
+    target_dt = _dt.strptime(date_str, "%Y-%m-%d")
+    formatted = target_dt.strftime("%m/%d/%Y")  # MM/DD/YYYY for the input
+
+    # ── 1. Check current grid date ────────────────────────────────────────────
+    async def current_grid_date() -> _dt | None:
+        try:
+            headers = page.locator(SELECTORS["grid_first_column_header_sr"])
+            count = await headers.count()
+            if count == 0:
+                return None
+            text = await headers.first.inner_text(timeout=2000)
+            # "Monday, August 1, 2026"
+            return _dt.strptime(text.strip(), "%A, %B %d, %Y")
+        except Exception:
+            return None
+
+    cur = await current_grid_date()
+    if cur is not None and cur >= target_dt:
+        log(f"  Grid already at {cur.strftime('%Y-%m-%d')} — no date navigation needed.")
+        return
+
+    log(f"  Grid date is {cur.strftime('%Y-%m-%d') if cur else 'unknown'}; "
+        f"need to reach {date_str} …")
+
+    # ── 2. Fast path: date picker input ───────────────────────────────────────
+    date_input = page.locator(SELECTORS["date_input"]).first
+    try:
+        if await date_input.count() > 0 and await date_input.is_visible():
+            log(f"  Using date picker input → {formatted}")
+            await date_input.triple_click()
+            await date_input.fill(formatted)
+            await page.keyboard.press("Enter")
+            await human_delay(DELAY_AFTER_NAVIGATION)
+            # Verify
+            cur = await current_grid_date()
+            if cur is not None and cur >= target_dt:
+                log(f"  ✓ Grid now at {cur.strftime('%Y-%m-%d')} via date picker.")
+                return
+            log("  Date picker did not update grid to target; falling back to Next clicks …")
+    except Exception as e:
+        log(f"  Date picker attempt failed ({e}); falling back to Next clicks …")
+
+    # ── 3. Slow path: click "Next 5 Days" until we reach or pass the target ──
+    MAX_NEXT_CLICKS = 60  # 60 × 5 = 300 days max
+    for i in range(MAX_NEXT_CLICKS):
+        cur = await current_grid_date()
+        if cur is not None and cur >= target_dt:
+            log(f"  ✓ Grid now at {cur.strftime('%Y-%m-%d')} after {i} Next clicks.")
+            return
+        try:
+            next_btn = page.locator(SELECTORS["grid_next_button"]).first
+            await next_btn.wait_for(state="visible", timeout=5000)
+            await human_click(page, next_btn)
+            await human_delay((0.5, 1.0))
+        except Exception as e:
+            log(f"  Warning: could not click Next ({e}); stopping date navigation.")
+            break
+
+    cur = await current_grid_date()
+    log(f"  Date navigation complete — grid is at "
+        f"{cur.strftime('%Y-%m-%d') if cur else 'unknown'}.")
+
+
 async def find_available_cell_in_window(page: Page, trailhead: str):
     """
     Search the current 5-day grid window for an available cell in the
@@ -265,6 +345,9 @@ async def scan_and_book(page: Page) -> bool:
         log("  Grid is visible.")
     except Exception:
         log("  Warning: availability grid did not appear in time — continuing anyway")
+
+    # Navigate to the configured start date (recreation.gov ignores ?date= in the URL)
+    await navigate_to_start_date(page, START_DATE)
 
     # Set group size
     await set_group_size(page, NUM_PEOPLE)

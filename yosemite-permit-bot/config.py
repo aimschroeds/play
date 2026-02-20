@@ -95,6 +95,21 @@ SELECTORS = {
     # ── Book Now button ───────────────────────────────────────────────────────
     "book_now_button": 'button.sarsa-button-primary:has-text("Book Now")',
 
+    # ── Date picker input ─────────────────────────────────────────────────────
+    # Recreation.gov ignores the ?date= URL parameter at runtime and resets the
+    # grid to today's date.  We interact with the date picker directly instead.
+    # Accepts MM/DD/YYYY input.
+    "date_input": 'input[aria-label="Start Date"]',
+
+    # ── Grid column header (used to read the currently-displayed start date) ──
+    # The first column header contains a screen-reader-only span with the full
+    # date: "Monday, August 1, 2026".  We use this to check whether the grid
+    # is already showing the desired start date.
+    "grid_first_column_header_sr": (
+        '[aria-label="Availability by Sites and Dates"] '
+        '[role="columnheader"] .rec-sr-only'
+    ),
+
     # ── Trailhead row and available cell selectors ────────────────────────────
     # Trailhead rows are identified by a named button inside a [role="row"] div.
     # Available cells have a parent div with CSS class "available".
