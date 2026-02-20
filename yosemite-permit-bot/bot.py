@@ -34,6 +34,7 @@ from playwright.async_api import async_playwright, Page, BrowserContext
 from config import (
     CDP_ENDPOINT,
     PERMIT_URL,
+    PERMIT_URL_TEMPLATE,
     START_DATE,
     LAUNCH_TZ,
     LAUNCH_HOUR,
@@ -184,30 +185,25 @@ async def navigate_to_start_date(page: Page, date_str: str) -> None:
     Ensure the availability grid is showing the window that contains date_str
     (YYYY-MM-DD).
 
-    Recreation.gov ignores the ?date= URL parameter at runtime and resets the
-    grid to today's date.  Strategy:
+    Recreation.gov sometimes ignores the ?date= URL parameter.  Strategy:
 
-    1. Read the first column header to get the currently-displayed start date.
-    2. If it's already >= our target, do nothing.
-    3. Try the date picker input (fast path: one interaction).
-    4. If that fails, click "Next 5 Days" repeatedly until we overshoot
-       or reach the target (slow path, capped at 60 clicks ≈ 300 days).
+    1. Read the first column header to check the currently-displayed date.
+    2. If already >= target, do nothing.
+    3. Navigate to PERMIT_URL_TEMPLATE with the target date (URL fast path).
+    4. If the grid still shows the wrong date, click "Next 5 Days" repeatedly
+       (capped at 60 clicks ≈ 300 days).
     """
-    from datetime import datetime as _dt
+    target_dt = datetime.strptime(date_str, "%Y-%m-%d")
 
-    target_dt = _dt.strptime(date_str, "%Y-%m-%d")
-    formatted = target_dt.strftime("%m/%d/%Y")  # MM/DD/YYYY for the input
-
-    # ── 1. Check current grid date ────────────────────────────────────────────
-    async def current_grid_date() -> _dt | None:
+    # ── Helper: read the first visible column date from the grid header ───────
+    async def current_grid_date():
         try:
             headers = page.locator(SELECTORS["grid_first_column_header_sr"])
-            count = await headers.count()
-            if count == 0:
+            if await headers.count() == 0:
                 return None
             text = await headers.first.inner_text(timeout=2000)
             # "Monday, August 1, 2026"
-            return _dt.strptime(text.strip(), "%A, %B %d, %Y")
+            return datetime.strptime(text.strip(), "%A, %B %d, %Y")
         except Exception:
             return None
 
@@ -219,25 +215,27 @@ async def navigate_to_start_date(page: Page, date_str: str) -> None:
     log(f"  Grid date is {cur.strftime('%Y-%m-%d') if cur else 'unknown'}; "
         f"need to reach {date_str} …")
 
-    # ── 2. Fast path: date picker input ───────────────────────────────────────
-    date_input = page.locator(SELECTORS["date_input"]).first
+    # ── Fast path: navigate to the dated URL ──────────────────────────────────
+    dated_url = PERMIT_URL_TEMPLATE.format(date=date_str)
+    log(f"  Navigating to dated URL: {dated_url}")
+    await page.goto(dated_url, wait_until="domcontentloaded")
+    await human_delay(DELAY_AFTER_NAVIGATION)
     try:
-        if await date_input.count() > 0 and await date_input.is_visible():
-            log(f"  Using date picker input → {formatted}")
-            await date_input.triple_click()
-            await date_input.fill(formatted)
-            await page.keyboard.press("Enter")
-            await human_delay(DELAY_AFTER_NAVIGATION)
-            # Verify
-            cur = await current_grid_date()
-            if cur is not None and cur >= target_dt:
-                log(f"  ✓ Grid now at {cur.strftime('%Y-%m-%d')} via date picker.")
-                return
-            log("  Date picker did not update grid to target; falling back to Next clicks …")
-    except Exception as e:
-        log(f"  Date picker attempt failed ({e}); falling back to Next clicks …")
+        await page.locator(SELECTORS["availability_grid"]).first.wait_for(
+            state="visible", timeout=20000
+        )
+    except Exception:
+        pass
 
-    # ── 3. Slow path: click "Next 5 Days" until we reach or pass the target ──
+    cur = await current_grid_date()
+    if cur is not None and cur >= target_dt:
+        log(f"  ✓ Grid now at {cur.strftime('%Y-%m-%d')} via URL navigation.")
+        return
+
+    log(f"  URL navigation landed at {cur.strftime('%Y-%m-%d') if cur else 'unknown'}; "
+        "falling back to Next-button clicks …")
+
+    # ── Slow path: click "Next 5 Days" until we reach or pass the target ─────
     MAX_NEXT_CLICKS = 60  # 60 × 5 = 300 days max
     for i in range(MAX_NEXT_CLICKS):
         cur = await current_grid_date()
