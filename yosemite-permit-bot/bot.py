@@ -122,7 +122,11 @@ async def wait_until_launch_window(page: Page) -> None:
         pass
     log("Pre-navigating grid to start date (this may take ~30 s) …")
     await navigate_to_start_date(page, START_DATE)
-    log("Grid pre-positioned. Waiting for launch time …")
+
+    # Pre-set group size now so at 9 AM we only need to scan + click
+    log("Pre-setting group size before launch …")
+    await set_group_size(page, NUM_PEOPLE)
+    log("Grid pre-positioned and group size set. Waiting for launch time …")
 
     # Burn the last few seconds
     remaining = seconds_until_launch() + LAUNCH_SECONDS_EARLY  # time to actual 9:00
@@ -348,12 +352,11 @@ async def scan_and_book(page: Page) -> bool:
         except Exception:
             log("  Warning: availability grid did not appear in time — continuing anyway")
 
-    # Ensure grid is at the target date window (no-op if already there)
+    # Ensure grid is at the target date window (no-op if already pre-positioned)
     await navigate_to_start_date(page, START_DATE)
 
-    # Set group size
-    await set_group_size(page, NUM_PEOPLE)
-    await human_delay(DELAY_AFTER_NAVIGATION)
+    # Group size is pre-set before this function is called (either during
+    # wait_until_launch_window or in main when --now is used).
 
     clicked_cell = False
 
@@ -426,6 +429,11 @@ async def main(skip_timer: bool = False) -> None:
         # Wait until the launch window (or skip if --now)
         if skip_timer:
             log("--now flag set — skipping timer, running immediately")
+            # Navigate and pre-set group size (normally done in wait_until_launch_window)
+            await page.goto(PERMIT_URL, wait_until="domcontentloaded")
+            await human_delay(DELAY_AFTER_NAVIGATION)
+            await navigate_to_start_date(page, START_DATE)
+            await set_group_size(page, NUM_PEOPLE)
         else:
             await wait_until_launch_window(page)
 
