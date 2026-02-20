@@ -47,16 +47,20 @@ SERVER_PID=$!
 # Give Flask a moment to bind
 sleep 1
 
-# ── Start ngrok ────────────────────────────────────────────────────────────────
-echo "Starting ngrok tunnel …"
-ngrok http "$PORT" --log=stdout --log-format=json > /tmp/ngrok-yosemite.log 2>&1 &
-NGROK_PID=$!
+# ── Start ngrok (skip if NGROK_URL already set — paid static domain) ───────────
+NGROK_PID=""
+if [[ -n "$NGROK_URL" ]]; then
+    echo "Using pre-configured ngrok URL: $NGROK_URL"
+else
+    echo "Starting ngrok tunnel …"
+    ngrok http "$PORT" --log=stdout --log-format=json > /tmp/ngrok-yosemite.log 2>&1 &
+    NGROK_PID=$!
 
-# Wait for ngrok API to be ready
-for i in {1..10}; do
-    sleep 1
-    NGROK_URL=$(curl -s http://localhost:4040/api/tunnels 2>/dev/null \
-        | python3 -c "
+    # Wait for ngrok API to be ready
+    for i in {1..10}; do
+        sleep 1
+        NGROK_URL=$(curl -s http://localhost:4040/api/tunnels 2>/dev/null \
+            | python3 -c "
 import sys, json
 try:
     data = json.load(sys.stdin)
@@ -67,8 +71,9 @@ try:
 except Exception:
     pass
 " 2>/dev/null)
-    [[ -n "$NGROK_URL" ]] && break
-done
+        [[ -n "$NGROK_URL" ]] && break
+    done
+fi
 
 # ── Print instructions ─────────────────────────────────────────────────────────
 echo ""
@@ -94,7 +99,8 @@ echo "Press Ctrl-C to stop."
 cleanup() {
     echo ""
     echo "Stopping …"
-    kill "$SERVER_PID" "$NGROK_PID" 2>/dev/null || true
+    kill "$SERVER_PID" 2>/dev/null || true
+    [[ -n "$NGROK_PID" ]] && kill "$NGROK_PID" 2>/dev/null || true
 }
 trap cleanup EXIT INT TERM
 
