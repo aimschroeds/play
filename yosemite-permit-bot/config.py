@@ -52,7 +52,7 @@ START_DATE = "2026-08-01"
 TRAILHEAD_PRIORITY = [
     "Lyell Canyon (Donohue Pass Eligible)",
     "Happy Isles->Past LYV (Donohue Pass Eligible)",
-    "Yosemite Creek",
+    # "Yosemite Creek",
 ]
 
 # How many 5-day grid windows to scan before giving up.
