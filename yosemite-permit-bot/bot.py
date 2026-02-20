@@ -27,7 +27,6 @@ Flow
 
 import argparse
 import asyncio
-import re
 import random
 import sys
 from datetime import datetime, timedelta
@@ -202,14 +201,18 @@ async def set_date_via_picker(page: Page, date_str: str) -> bool:
     target_dt = datetime.strptime(date_str, "%Y-%m-%d")
     log(f"  Opening date picker → {target_dt.strftime('%B %Y')}, day {target_dt.day} …")
     try:
-        date_input = page.locator(SELECTORS["date_input"]).first
-        await date_input.wait_for(state="visible", timeout=8000)
-        await date_input.click()
-        await asyncio.sleep(0.3)
+        # Click the calendar icon toggle button to open the popup
+        toggle_btn = page.locator(SELECTORS["date_input"]).first
+        await toggle_btn.wait_for(state="visible", timeout=8000)
+        await toggle_btn.click()
+
+        # Wait for the month header to appear — confirms popup is open
+        header_el = page.locator(SELECTORS["date_picker_month_header"]).first
+        await header_el.wait_for(state="visible", timeout=5000)
+        await asyncio.sleep(0.2)
 
         # Navigate months until we reach the target month/year
         for _ in range(24):
-            header_el = page.locator(SELECTORS["date_picker_month_header"]).first
             header_text = (await header_el.inner_text(timeout=2000)).strip()
             try:
                 cur_dt = datetime.strptime(header_text, "%B %Y")
@@ -225,9 +228,11 @@ async def set_date_via_picker(page: Page, date_str: str) -> bool:
             await page.locator(SELECTORS[btn_key]).first.click()
             await asyncio.sleep(0.15)  # calendar re-renders fast; keep it tight
 
-        # Click the exact day — use regex to avoid "1" matching "10", "21", etc.
-        day_btn = page.locator(SELECTORS["date_picker_day"]).filter(
-            has_text=re.compile(rf"^\s*{target_dt.day}\s*$")
+        # Click the exact day via aria-label substring ", {day} {Month} {year}".
+        # Using ", 1 August 2026" (comma+space prefix) avoids matching "11", "21", "31".
+        day_label = f", {target_dt.day} {target_dt.strftime('%B')} {target_dt.year}"
+        day_btn = page.locator(
+            f'{SELECTORS["date_picker_day"]}[aria-label*="{day_label}"]'
         ).first
         await day_btn.wait_for(state="visible", timeout=3000)
         await day_btn.click()
