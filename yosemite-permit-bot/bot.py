@@ -28,6 +28,7 @@ Flow
 import argparse
 import asyncio
 import random
+import subprocess
 import sys
 from datetime import datetime, timedelta
 
@@ -49,6 +50,10 @@ from config import (
     DELAY_BETWEEN_ACTIONS,
     DELAY_AFTER_NAVIGATION,
     SELECTORS,
+    TWILIO_ACCOUNT_SID,
+    TWILIO_AUTH_TOKEN,
+    TWILIO_FROM,
+    ALERT_PHONE,
 )
 
 
@@ -95,6 +100,39 @@ def seconds_until_launch() -> float:
             return delta
 
     return 0.0   # already past both; run immediately
+
+
+def send_alert(msg: str) -> None:
+    """
+    Notify via macOS notification + Twilio SMS.
+    Called when a permit lands in the cart (alert-triggered flow) so the user
+    knows to pick up their phone / open the browser and complete checkout.
+    """
+    # macOS notification — fires even if phone is on silent
+    try:
+        subprocess.run(
+            [
+                "osascript", "-e",
+                f'display notification "{msg}" with title "Yosemite Permit Bot" '
+                'sound name "Hero"',
+            ],
+            check=False,
+        )
+    except Exception:
+        pass
+
+    # Twilio SMS back to real phone
+    if all([TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN, TWILIO_FROM, ALERT_PHONE]):
+        try:
+            from twilio.rest import Client
+            Client(TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN).messages.create(
+                body=msg, from_=TWILIO_FROM, to=ALERT_PHONE,
+            )
+            log(f"  Alert SMS sent to {ALERT_PHONE}")
+        except Exception as e:
+            log(f"  Warning: Twilio alert failed: {e}")
+    else:
+        log("  (Twilio not configured — skipping SMS alert)")
 
 
 async def wait_until_launch_window(page: Page) -> None:
@@ -387,6 +425,139 @@ async def scan_and_book(page: Page) -> bool:
     return booked
 
 
+# ── Alert-triggered parallel booking ──────────────────────────────────────────
+
+async def book_single(
+    page: Page,
+    date_str: str,
+    trailhead: str,
+    success_event: asyncio.Event,
+) -> bool:
+    """
+    Try to book one specific date + trailhead opening.
+    Used by book_from_alert to race multiple openings in parallel.
+    Returns True on success; bails early if success_event is already set
+    (meaning another tab already won).
+    """
+    tag = f"[{trailhead[:30]} / {date_str}]"
+    log(f"{tag} Starting …")
+    try:
+        await page.goto(PERMIT_URL, wait_until="domcontentloaded")
+        if success_event.is_set():
+            return False
+
+        try:
+            await page.locator(SELECTORS["availability_grid"]).first.wait_for(
+                state="visible", timeout=20000
+            )
+        except Exception:
+            log(f"{tag} Warning: grid timeout — continuing")
+
+        if success_event.is_set():
+            return False
+
+        ok = await set_date_via_picker(page, date_str)
+        if not ok:
+            log(f"{tag} ✗ Date picker failed")
+            return False
+
+        if success_event.is_set():
+            return False
+
+        await set_group_size(page, NUM_PEOPLE)
+        await asyncio.sleep(0.3)
+
+        if success_event.is_set():
+            return False
+
+        cell = await find_available_cell_in_window(page, trailhead)
+        if cell is None:
+            log(f"{tag} ✗ No available cell")
+            return False
+
+        if success_event.is_set():
+            return False
+
+        try:
+            label = await cell.get_attribute("aria-label") or ""
+        except Exception:
+            label = ""
+        log(f"{tag} ✓ Cell found: {label}")
+        await human_click(page, cell)
+        await asyncio.sleep(0.4)
+
+        if success_event.is_set():
+            return False
+
+        booked = await click_book_now(page)
+        if booked:
+            success_event.set()
+            log(f"{tag} ✓✓ Reached checkout — alerting user …")
+            send_alert(
+                f"⚠️ Yosemite permit in cart! "
+                f"{trailhead}, {date_str} — COMPLETE CHECKOUT NOW"
+            )
+        return booked
+
+    except Exception as e:
+        log(f"{tag} Error: {e}")
+        return False
+
+
+async def book_from_alert(openings: list[dict]) -> None:
+    """
+    Entry point for the Outdoor Status alert flow.
+
+    Receives a list of openings scraped from the alert page:
+        [{"date": "2026-08-05", "trailhead": "Happy Isles->Past LYV (Donohue Pass Eligible)"}, …]
+
+    Opens one browser tab per opening and races them concurrently.
+    The first tab to click "Book Now" fires the alert and sets the success
+    event so the others abandon cleanly.
+    """
+    log(f"Alert received — racing {len(openings)} opening(s) in parallel …")
+    for o in openings:
+        log(f"  • {o['trailhead']} on {o['date']}")
+
+    success_event = asyncio.Event()
+
+    async with async_playwright() as pw:
+        try:
+            browser = await pw.chromium.connect_over_cdp(CDP_ENDPOINT)
+        except Exception as e:
+            log(f"ERROR: Could not connect to Chrome: {e}")
+            send_alert(
+                "❌ Yosemite bot: Could not connect to Chrome — "
+                "make sure Chrome is running (bash start_chrome.sh)"
+            )
+            return
+
+        contexts = browser.contexts
+        context = contexts[0] if contexts else await browser.new_context()
+
+        async def attempt(opening: dict) -> bool:
+            page = await context.new_page()
+            won = await book_single(
+                page, opening["date"], opening["trailhead"], success_event
+            )
+            # Close losing tabs; keep the winning checkout tab open
+            if not won:
+                try:
+                    await page.close()
+                except Exception:
+                    pass
+            return won
+
+        results = await asyncio.gather(
+            *[attempt(o) for o in openings],
+            return_exceptions=True,
+        )
+
+        if not any(r is True for r in results):
+            log("✗ All booking attempts failed — permits may already be gone.")
+            send_alert("❌ Yosemite bot: All openings failed (already sold out?).")
+
+
 # ── Main ───────────────────────────────────────────────────────────────────────
 
 async def main(skip_timer: bool = False) -> None:
@@ -436,7 +607,27 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Recreation.gov Yosemite permit bot")
     parser.add_argument(
         "--now", action="store_true",
-        help="Skip the 9 AM timer and run immediately"
+        help="Skip the 9 AM timer and run immediately",
+    )
+    parser.add_argument(
+        "--date",
+        metavar="YYYY-MM-DD",
+        help="Target a specific date instead of config START_DATE (implies --now)",
+    )
+    parser.add_argument(
+        "--trailhead",
+        metavar="NAME",
+        help="Target a specific trailhead (exact recreation.gov aria-label); "
+             "if omitted, TRAILHEAD_PRIORITY list is used",
     )
     args = parser.parse_args()
-    asyncio.run(main(skip_timer=args.now))
+
+    if args.date or args.trailhead:
+        # Single-opening manual mode — useful for testing or manual retries
+        opening = {
+            "date": args.date or START_DATE,
+            "trailhead": args.trailhead or TRAILHEAD_PRIORITY[0],
+        }
+        asyncio.run(book_from_alert([opening]))
+    else:
+        asyncio.run(main(skip_timer=args.now))

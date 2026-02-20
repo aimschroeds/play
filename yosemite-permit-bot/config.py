@@ -7,7 +7,14 @@ BEFORE RUNNING:
      (or manually: google-chrome --remote-debugging-port=9222 --user-data-dir=/tmp/chrome-debug)
   2. In that Chrome window, log in to recreation.gov manually.
   3. Run the bot: python bot.py
+
+For the Outdoor Status alert integration (server.py):
+  Set the following environment variables (copy .env.example → .env and source it,
+  or add them to ~/.zshrc):
+    TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN, TWILIO_FROM, ALERT_PHONE
 """
+
+import os
 
 # ── Recreation.gov permit page ─────────────────────────────────────────────────
 # Yosemite National Park - Wilderness Permits
@@ -152,3 +159,34 @@ SELECTORS = {
         ':not([aria-label*="not yet released"])'
     ),
 }
+
+# ── Outdoor Status → recreation.gov trailhead name mapping ────────────────────
+# Outdoor Status uses plain names (sometimes with "→" arrows).
+# Recreation.gov uses exact aria-label strings (with "->" and suffix).
+# Add entries here as new trailheads appear in your alerts.
+#
+# Keys   = what Outdoor Status shows on their alert page
+# Values = exact aria-label on the recreation.gov availability grid
+TRAILHEAD_MAP: dict[str, str] = {
+    "Happy Isles->Past LYV":                    "Happy Isles->Past LYV (Donohue Pass Eligible)",
+    "Happy Isles → Past LYV":                   "Happy Isles->Past LYV (Donohue Pass Eligible)",
+    "Happy Isles->Past LYV (Donohue Pass Eligible)": "Happy Isles->Past LYV (Donohue Pass Eligible)",
+    "Lyell Canyon":                             "Lyell Canyon (Donohue Pass Eligible)",
+    "Lyell Canyon (Donohue Pass Eligible)":     "Lyell Canyon (Donohue Pass Eligible)",
+    "Yosemite Creek":                           "Yosemite Creek",
+    "Sunrise Lakes":                            "Sunrise Lakes",
+    "Ten Lakes":                                "Ten Lakes",
+    "Glacier Point/Panorama":                   "Glacier Point/Panorama",
+    "Little Yosemite Valley":                   "Little Yosemite Valley",
+}
+
+# ── Twilio credentials (read from environment) ─────────────────────────────────
+# Set these in your shell (e.g. ~/.zshrc) or source the .env file:
+#   export TWILIO_ACCOUNT_SID="ACxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+#   export TWILIO_AUTH_TOKEN="your_auth_token"
+#   export TWILIO_FROM="+15551234567"   # your Twilio number
+#   export ALERT_PHONE="+15559876543"   # YOUR real phone number to receive alerts
+TWILIO_ACCOUNT_SID = os.environ.get("TWILIO_ACCOUNT_SID", "")
+TWILIO_AUTH_TOKEN  = os.environ.get("TWILIO_AUTH_TOKEN",  "")
+TWILIO_FROM        = os.environ.get("TWILIO_FROM",        "")
+ALERT_PHONE        = os.environ.get("ALERT_PHONE",        "")
