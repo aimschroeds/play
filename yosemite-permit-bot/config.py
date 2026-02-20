@@ -114,11 +114,11 @@ SELECTORS = {
 
     # ── Trailhead row and available cell selectors ────────────────────────────
     # Trailhead rows are identified by a named button inside a [role="row"] div.
-    # Available cells have a parent div with CSS class "available".
     # Template — fill {trailhead} with the exact aria-label string.
+    #
+    # available_cell_in_row: we do NOT filter by a parent CSS class (.available)
+    # because Yosemite uses multiple states for bookable cells (.available,
+    # .walk-up, …).  We rely solely on the button being enabled (:not(:disabled)).
     "trailhead_row_template": '[role="row"]:has(button[aria-label="{trailhead}"])',
-    "available_cell_in_row":  (
-        '.rec-grid-grid-cell.available '
-        'button.rec-availability-date:not(:disabled)'
-    ),
+    "available_cell_in_row": 'button.rec-availability-date:not(:disabled)',
 }
