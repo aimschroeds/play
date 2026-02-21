@@ -64,6 +64,9 @@ TRAILHEAD_PRIORITY = [
 # 2 windows × 5 days ≈ 8-10 days of coverage starting from START_DATE.
 MAX_DATE_WINDOWS = 2
 
+# ── Keep-alive (session refresh) ──────────────────────────────────────────────
+KEEP_ALIVE_INTERVAL_MINUTES = 30
+
 # ── Timing / human-simulation ──────────────────────────────────────────────────
 # All delay values are in seconds.
 DELAY_BETWEEN_ACTIONS = (0.1, 0.6)   # (min, max) uniform random delay

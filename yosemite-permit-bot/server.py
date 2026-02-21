@@ -36,12 +36,20 @@ import logging
 import os
 import re
 import threading
+import time
 from datetime import datetime
 
 import httpx
 from bs4 import BeautifulSoup
 from flask import Flask, abort, request
-from config import TRAILHEAD_MAP, WEBHOOK_SECRET
+from config import (
+    CDP_ENDPOINT,
+    KEEP_ALIVE_INTERVAL_MINUTES,
+    PERMIT_URL,
+    SLACK_WEBHOOK_URL,
+    TRAILHEAD_MAP,
+    WEBHOOK_SECRET,
+)
 
 app = Flask(__name__)
 logging.basicConfig(level=logging.INFO, format="[%(asctime)s] %(message)s")
@@ -195,6 +203,75 @@ def scrape_openings(url: str) -> list[dict]:
         )
 
     return openings
+
+
+# ── Slack notification helper ─────────────────────────────────────────────────
+
+def notify_slack(msg: str) -> None:
+    """Post a message to the configured Slack incoming webhook."""
+    if not SLACK_WEBHOOK_URL:
+        log.warning("Slack webhook not configured — cannot send: %s", msg)
+        return
+    try:
+        httpx.post(SLACK_WEBHOOK_URL, json={"text": msg}, timeout=10)
+    except Exception as e:
+        log.error("Slack notification failed: %s", e)
+
+
+# ── Recreation.gov session keep-alive ─────────────────────────────────────────
+
+async def _keep_alive_once() -> None:
+    """
+    Connect to Chrome via CDP, load the permit page, and check we're still
+    logged in.  Alerts via Slack if the session is expired or Chrome is down.
+    """
+    from playwright.async_api import async_playwright
+
+    async with async_playwright() as pw:
+        browser = await pw.chromium.connect_over_cdp(CDP_ENDPOINT)
+        contexts = browser.contexts
+        if not contexts:
+            notify_slack(
+                "⚠️ Yosemite bot: Chrome has no browser context. "
+                "Open Chrome and log into recreation.gov."
+            )
+            return
+
+        context = contexts[0]
+        page = context.pages[0] if context.pages else await context.new_page()
+
+        await page.goto(PERMIT_URL, wait_until="domcontentloaded")
+        await page.wait_for_timeout(3000)
+
+        # recreation.gov shows a "Log In" nav link when signed out
+        login_link = page.locator('a[href*="/login"], button:has-text("Log In")')
+        if await login_link.count() > 0:
+            notify_slack(
+                "⚠️ Yosemite bot: recreation.gov session expired! "
+                "Open Chrome and log back in."
+            )
+            log.warning("Keep-alive: session expired — Slack alert sent")
+        else:
+            log.info("Keep-alive: session OK")
+
+
+def _keep_alive_loop() -> None:
+    """Run _keep_alive_once() on a fixed interval. Runs in a daemon thread."""
+    interval = KEEP_ALIVE_INTERVAL_MINUTES * 60
+    while True:
+        time.sleep(interval)
+        try:
+            asyncio.run(_keep_alive_once())
+        except Exception as e:
+            log.error("Keep-alive failed: %s", e)
+            notify_slack(
+                f"⚠️ Yosemite bot: keep-alive check failed — {e}. "
+                "Is Chrome running with start_chrome.sh?"
+            )
+
+
+# Start the keep-alive thread on import (server startup)
+threading.Thread(target=_keep_alive_loop, daemon=True, name="keep-alive").start()
 
 
 # ── SMS webhook (iOS Shortcut → ngrok → here) ────────────────────────────────
