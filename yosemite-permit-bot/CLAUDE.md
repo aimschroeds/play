@@ -6,7 +6,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 Automated bot for booking Yosemite wilderness permits from recreation.gov. Two modes:
 1. **Standard**: Waits for 9 AM PT release window, scans availability grid, books first available permit
-2. **Alert-triggered**: Receives SMS alerts from Outdoor Status via Twilio webhook, races multiple openings in parallel
+2. **Alert-triggered**: Outdoor Status texts your phone when permits open; an iOS Shortcut forwards the SMS to the webhook server, which races multiple openings in parallel
 
 ## Running
 
@@ -39,7 +39,7 @@ Secrets are stored in 1Password (vault: "Development", item: "twilio-yosemite-bo
 All code lives in the root directory — no nested packages.
 
 - **`bot.py`** — Core booking automation. Connects to Chrome via CDP (`localhost:9222`), uses Playwright async API for all browser interaction. `main()` is the standard workflow entry point; `book_from_alert(openings)` is the parallel-race entry point called by the server.
-- **`server.py`** — Flask webhook server. `POST /sms` receives Twilio webhooks, scrapes the Outdoor Status alert page for permit details, then spawns async booking in a background thread. `GET /test?url=` simulates alerts for dev testing.
+- **`server.py`** — Flask webhook server. `POST /sms` receives forwarded SMS from an iOS Shortcut (authenticated via `X-Webhook-Secret` header), scrapes the Outdoor Status alert page for permit details, then spawns async booking in a background thread. `GET /test?url=` simulates alerts for dev testing.
 - **`config.py`** — All configuration: permit targeting (dates, trailheads, group size), timing constants, recreation.gov CSS/ARIA selectors, and the `TRAILHEAD_MAP` that translates Outdoor Status names to recreation.gov aria-labels.
 - **`start_chrome.sh`** — Launches Chrome with `--remote-debugging-port=9222` and a persistent profile at `~/.chrome-recgov-debug`.
 - **`start_server.sh`** — Starts Flask + ngrok tunnel, validates env vars, prints webhook URL.
@@ -59,4 +59,4 @@ Key values to adjust per trip: `START_DATE`, `NUM_PEOPLE`, `TRAILHEAD_PRIORITY`,
 
 ## Secrets (`.env.template`)
 
-Managed via 1Password. The `.env.template` contains `op://` secret references resolved at runtime by `op run`. Fields: `TWILIO_ACCOUNT_SID`, `TWILIO_AUTH_TOKEN`, `TWILIO_FROM`, `ALERT_PHONE`, optional `NGROK_URL`.
+Managed via 1Password. The `.env.template` contains `op://` secret references resolved at runtime by `op run`. Fields: `WEBHOOK_SECRET`, `SLACK_WEBHOOK_URL`, optional `NGROK_URL`.

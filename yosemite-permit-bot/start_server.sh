@@ -19,7 +19,7 @@ PORT="${PORT:-5050}"
 
 # ── Start Flask server ─────────────────────────────────────────────────────────
 echo "Starting Flask webhook server on port $PORT …"
-python "$SCRIPT_DIR/server.py" &
+python3 "$SCRIPT_DIR/server.py" &
 SERVER_PID=$!
 
 # Give Flask a moment to bind
