@@ -15,7 +15,14 @@
 set -e
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+SCRIPT_PATH="$SCRIPT_DIR/$(basename "$0")"
 PORT="${PORT:-5050}"
+
+# ── Prevent macOS from sleeping while the server runs ─────────────────────────
+if [[ -z "$CAFFEINATED" ]]; then
+    echo "Wrapping with caffeinate -s (prevent sleep) …"
+    CAFFEINATED=1 exec caffeinate -s "$SCRIPT_PATH" "$@"
+fi
 
 # ── Start Flask server ─────────────────────────────────────────────────────────
 echo "Starting Flask webhook server on port $PORT …"
@@ -57,11 +64,11 @@ fi
 echo ""
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 if [[ -n "$NGROK_URL" ]]; then
-    echo "Twilio webhook URL — paste this into Twilio console:"
+    echo "Webhook URL (use in iOS Shortcut):"
     echo ""
     echo "  ${NGROK_URL}/sms"
     echo ""
-    echo "Dev/test endpoint (triggers booking with a real alert URL):"
+    echo "Dev/test endpoint:"
     echo "  ${NGROK_URL}/test?url=<outdoorstatus-alert-url>"
 else
     echo "⚠️  Could not get ngrok URL. Check /tmp/ngrok-yosemite.log"
