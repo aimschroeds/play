@@ -70,8 +70,8 @@ else
     echo "   Flask is running on http://localhost:${PORT}/sms"
 fi
 echo ""
-echo "Twilio number (outbound): $TWILIO_FROM"
-echo "Alert will be sent to:    $ALERT_PHONE"
+echo "Twilio number (inbound):  $TWILIO_FROM"
+echo "Slack alert:              ${SLACK_WEBHOOK_URL:+configured}${SLACK_WEBHOOK_URL:-NOT SET}"
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 echo ""
 echo "Press Ctrl-C to stop."
