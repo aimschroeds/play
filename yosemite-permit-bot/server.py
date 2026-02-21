@@ -1,37 +1,34 @@
 """
-Webhook server for Outdoor Status SMS → Yosemite permit auto-booking.
+Webhook server for Outdoor Status → Yosemite permit auto-booking.
 
 Flow
 ────
-1. Outdoor Status texts your Twilio number when a permit opens.
-2. Twilio POSTs the SMS body to this server's /sms endpoint.
-3. We extract the outdoorstatus.com URL from the SMS, scrape it for
-   every date/trailhead pair, and hand them all to book_from_alert().
+1. Outdoor Status texts your phone when a permit opens.
+2. An iOS Shortcut forwards the SMS body to this server's /sms endpoint.
+3. We extract the outdoorstatus.com URL, scrape it for every
+   date/trailhead pair, and hand them all to book_from_alert().
 4. book_from_alert() opens one browser tab per opening and races them;
-   the winner sends you an alert SMS to complete checkout.
+   the winner posts a Slack notification so you can complete checkout.
 
 Setup (one-time)
 ────────────────
-1. Set env vars — copy .env.example to .env, fill in values, then:
-     source .env          (or add exports to ~/.zshrc)
+1. Install deps:
+     pip install flask httpx beautifulsoup4
 
-2. Install deps:
-     pip install flask twilio httpx beautifulsoup4
-
-3. Install ngrok (if not already):
+2. Install ngrok (if not already):
      brew install ngrok/ngrok/ngrok
-     ngrok config add-authtoken <your-token>   # free at ngrok.com
+     ngrok config add-authtoken <your-token>
 
-4. Run everything:
-     bash start_server.sh
+3. Run everything:
+     op run --env-file .env.template -- bash start_server.sh
 
-5. Paste the printed ngrok URL (e.g. https://abc123.ngrok-free.app/sms)
-   into the Twilio console:
-     Phone Numbers → Manage → <your Twilio number>
-     → Messaging → "A message comes in" → Webhook → HTTP POST
-
-6. Update your Outdoor Status account to send alerts to your Twilio number
-   instead of your personal phone.
+4. Set up an iOS Shortcut automation:
+     Trigger: Message → contains "outdoorstatus"
+     Action:  Get Contents of URL
+       URL:    https://<ngrok-url>/sms
+       Method: POST
+       Headers: X-Webhook-Secret = <your secret>
+       Body (Form): Body = [Message content]
 """
 
 import asyncio
@@ -44,9 +41,7 @@ from datetime import datetime
 import httpx
 from bs4 import BeautifulSoup
 from flask import Flask, abort, request
-from twilio.request_validator import RequestValidator
-
-from config import TRAILHEAD_MAP, TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN
+from config import TRAILHEAD_MAP, WEBHOOK_SECRET
 
 app = Flask(__name__)
 logging.basicConfig(level=logging.INFO, format="[%(asctime)s] %(message)s")
@@ -202,19 +197,14 @@ def scrape_openings(url: str) -> list[dict]:
     return openings
 
 
-# ── Twilio webhook ─────────────────────────────────────────────────────────────
+# ── SMS webhook (iOS Shortcut → ngrok → here) ────────────────────────────────
 
 @app.route("/sms", methods=["POST"])
 def handle_sms():
-    # Validate the request is genuinely from Twilio (prevents spoofing)
-    if TWILIO_AUTH_TOKEN:
-        validator = RequestValidator(TWILIO_AUTH_TOKEN)
-        if not validator.validate(
-            request.url,
-            request.form.to_dict(),
-            request.headers.get("X-Twilio-Signature", ""),
-        ):
-            log.warning("Invalid Twilio signature — request rejected")
+    # Validate shared secret (prevents random hits on the public ngrok URL)
+    if WEBHOOK_SECRET:
+        if request.headers.get("X-Webhook-Secret") != WEBHOOK_SECRET:
+            log.warning("Invalid or missing webhook secret — request rejected")
             abort(403)
 
     body = request.form.get("Body", "")

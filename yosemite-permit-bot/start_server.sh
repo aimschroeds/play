@@ -2,17 +2,15 @@
 # Start the Outdoor Status webhook server + ngrok tunnel.
 #
 # Prerequisites (one-time):
-#   pip install flask twilio httpx beautifulsoup4
+#   pip install flask httpx beautifulsoup4
 #   brew install ngrok/ngrok/ngrok
-#   ngrok config add-authtoken <token>    # free at ngrok.com
+#   ngrok config add-authtoken <token>
 #   brew install 1password-cli
 #
 # Usage (secrets injected by 1Password):
 #   op run --env-file .env.template -- bash start_server.sh
 #
-# Then paste the printed /sms URL into Twilio:
-#   Console → Phone Numbers → Manage → <number>
-#   → Messaging → "A message comes in" → Webhook → HTTP POST
+# Then use the printed /sms URL in your iOS Shortcut.
 
 set -e
 
@@ -70,7 +68,7 @@ else
     echo "   Flask is running on http://localhost:${PORT}/sms"
 fi
 echo ""
-echo "Twilio number (inbound):  $TWILIO_FROM"
+echo "Webhook auth:             ${WEBHOOK_SECRET:+set}${WEBHOOK_SECRET:-NOT SET}"
 echo "Slack alert:              ${SLACK_WEBHOOK_URL:+configured}${SLACK_WEBHOOK_URL:-NOT SET}"
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 echo ""
