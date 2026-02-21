@@ -3,6 +3,5 @@ pytz>=2024.1
 
 # Alert server (server.py)
 flask>=3.0
-twilio>=9.0
 httpx>=0.27
 beautifulsoup4>=4.12

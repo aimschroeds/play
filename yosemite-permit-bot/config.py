@@ -9,9 +9,7 @@ BEFORE RUNNING:
   3. Run the bot: python bot.py
 
 For the Outdoor Status alert integration (server.py):
-  Set the following environment variables (copy .env.example → .env and source it,
-  or add them to ~/.zshrc):
-    TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN, TWILIO_FROM, ALERT_PHONE
+  Set WEBHOOK_SECRET and SLACK_WEBHOOK_URL in .env.template (1Password refs).
 """
 
 import os
@@ -180,13 +178,11 @@ TRAILHEAD_MAP: dict[str, str] = {
     "Little Yosemite Valley":                   "Little Yosemite Valley",
 }
 
-# ── Twilio credentials (read from environment) ─────────────────────────────────
-# Set these in your shell (e.g. ~/.zshrc) or source the .env file:
-#   export TWILIO_ACCOUNT_SID="ACxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
-#   export TWILIO_AUTH_TOKEN="your_auth_token"
-#   export TWILIO_FROM="+15551234567"   # your Twilio number
-#   export ALERT_PHONE="+15559876543"   # YOUR real phone number to receive alerts
-TWILIO_ACCOUNT_SID = os.environ.get("TWILIO_ACCOUNT_SID", "")
-TWILIO_AUTH_TOKEN  = os.environ.get("TWILIO_AUTH_TOKEN",  "")
-TWILIO_FROM        = os.environ.get("TWILIO_FROM",        "")
-ALERT_PHONE        = os.environ.get("ALERT_PHONE",        "")
+# ── Webhook auth (prevents random hits on public ngrok URL) ───────────────────
+WEBHOOK_SECRET = os.environ.get("WEBHOOK_SECRET", "")
+
+# ── Slack incoming webhook (outbound notifications) ────────────────────────────
+# When a permit lands in the cart, the bot posts to this Slack webhook so you
+# know to complete checkout.  Create one at:
+#   https://api.slack.com/messaging/webhooks
+SLACK_WEBHOOK_URL = os.environ.get("SLACK_WEBHOOK_URL", "")

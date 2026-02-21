@@ -50,10 +50,7 @@ from config import (
     DELAY_BETWEEN_ACTIONS,
     DELAY_AFTER_NAVIGATION,
     SELECTORS,
-    TWILIO_ACCOUNT_SID,
-    TWILIO_AUTH_TOKEN,
-    TWILIO_FROM,
-    ALERT_PHONE,
+    SLACK_WEBHOOK_URL,
 )
 
 
@@ -104,9 +101,8 @@ def seconds_until_launch() -> float:
 
 def send_alert(msg: str) -> None:
     """
-    Notify via macOS notification + Twilio SMS.
-    Called when a permit lands in the cart (alert-triggered flow) so the user
-    knows to pick up their phone / open the browser and complete checkout.
+    Notify via macOS notification + Slack webhook.
+    Called when a permit lands in the cart so the user knows to complete checkout.
     """
     # macOS notification — fires even if phone is on silent
     try:
@@ -121,18 +117,16 @@ def send_alert(msg: str) -> None:
     except Exception:
         pass
 
-    # Twilio SMS back to real phone
-    if all([TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN, TWILIO_FROM, ALERT_PHONE]):
+    # Slack webhook notification
+    if SLACK_WEBHOOK_URL:
         try:
-            from twilio.rest import Client
-            Client(TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN).messages.create(
-                body=msg, from_=TWILIO_FROM, to=ALERT_PHONE,
-            )
-            log(f"  Alert SMS sent to {ALERT_PHONE}")
+            import httpx
+            httpx.post(SLACK_WEBHOOK_URL, json={"text": msg}, timeout=10)
+            log("  Slack alert sent")
         except Exception as e:
-            log(f"  Warning: Twilio alert failed: {e}")
+            log(f"  Warning: Slack alert failed: {e}")
     else:
-        log("  (Twilio not configured — skipping SMS alert)")
+        log("  (Slack webhook not configured — skipping alert)")
 
 
 async def wait_until_launch_window(page: Page) -> None:
