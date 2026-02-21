@@ -15,21 +15,24 @@ Automated bot for booking Yosemite wilderness permits from recreation.gov. Two m
 bash start_chrome.sh
 
 # Run bot (waits until 9 AM PT, then scans and books)
-python bot.py
-python bot.py --now                         # skip timer
-python bot.py --date YYYY-MM-DD             # target specific date
-python bot.py --trailhead "Trailhead Name"  # target specific trailhead
+op run --env-file .env.template -- python bot.py
+op run --env-file .env.template -- python bot.py --now         # skip timer
+op run --env-file .env.template -- python bot.py --date YYYY-MM-DD
 
 # Run webhook server (for alert-triggered bookings)
-bash start_server.sh
+op run --env-file .env.template -- bash start_server.sh
 ```
 
 ## Setup
 
 ```bash
 pip install -r requirements.txt
-cp .env.example .env  # fill in Twilio credentials
+brew install 1password-cli
+brew install ngrok/ngrok/ngrok
+ngrok config add-authtoken <token>
 ```
+
+Secrets are stored in 1Password (vault: "Development", item: "twilio-yosemite-bot") and injected at runtime via `op run --env-file .env.template`. No `.env` file needed.
 
 ## Architecture
 
@@ -54,6 +57,6 @@ All code lives in the root directory — no nested packages.
 
 Key values to adjust per trip: `START_DATE`, `NUM_PEOPLE`, `TRAILHEAD_PRIORITY`, `MAX_DATE_WINDOWS`. DOM selectors are also here and will need updating if recreation.gov changes their markup.
 
-## Environment Variables (.env)
+## Secrets (`.env.template`)
 
-`TWILIO_ACCOUNT_SID`, `TWILIO_AUTH_TOKEN`, `TWILIO_FROM`, `ALERT_PHONE`, optional `NGROK_URL`.
+Managed via 1Password. The `.env.template` contains `op://` secret references resolved at runtime by `op run`. Fields: `TWILIO_ACCOUNT_SID`, `TWILIO_AUTH_TOKEN`, `TWILIO_FROM`, `ALERT_PHONE`, optional `NGROK_URL`.
