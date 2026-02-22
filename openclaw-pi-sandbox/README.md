@@ -119,7 +119,6 @@ Register these with the burner email + burner phone:
 | Telegram | Phone number | Built-in Telegram channel |
 | WhatsApp | Phone number (prepaid SIM) | Built-in WhatsApp channel |
 | Signal | Phone number | Built-in Signal channel |
-| Discord | Email | Built-in Discord channel |
 | Slack | Email (create a new workspace) | Built-in Slack channel |
 
 **Important:** Do NOT connect your personal accounts. The whole point is isolation.
