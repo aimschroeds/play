@@ -4,7 +4,7 @@
 
 ## Basics
 
-- **Name:** [Your first name]
+- **Name:** Aimee
 - **Timezone:** America/New_York
 - **Language:** English
 
@@ -12,7 +12,7 @@
 
 - Be concise — I prefer short messages over walls of text
 - Use Telegram as the primary contact channel
-- Don't message me between 11 PM and 7 AM unless it's truly urgent
+- Don't message me between 10 PM and 7 AM unless it's truly urgent or we are actively engaged in discussion
 - For urgent: financial alerts, security alerts, time-sensitive calendar items
 
 ## Context

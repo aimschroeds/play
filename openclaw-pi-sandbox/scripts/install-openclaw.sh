@@ -82,7 +82,14 @@ info "Installing OpenClaw..."
 if command -v openclaw &>/dev/null; then
     warn "OpenClaw already installed. Upgrading to latest..."
 fi
-npm install -g openclaw@latest
+npm install -g openclaw@latest --ignore-scripts
+info "Running post-install build (skipping optional native addons)..."
+OPENCLAW_PKG_DIR="$(npm root -g)/openclaw"
+if [[ -d "$OPENCLAW_PKG_DIR" ]]; then
+    (cd "$OPENCLAW_PKG_DIR" && npm rebuild --ignore-optional 2>&1) || warn "Some optional native addons failed to build (e.g. Discord opus) — this is OK if you don't use Discord."
+else
+    warn "Could not find openclaw package dir for rebuild — skipping. OpenClaw should still work."
+fi
 info "OpenClaw version: $(openclaw --version 2>/dev/null || echo 'installed')"
 
 # ── Step 3: Run onboarding ────────────────────────────────────────

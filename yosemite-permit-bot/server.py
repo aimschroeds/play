@@ -255,13 +255,18 @@ async def _keep_alive_once() -> None:
             log.info("Keep-alive: session OK")
 
 
+async def _keep_alive_with_timeout() -> None:
+    """Run _keep_alive_once with a 60-second timeout to prevent hangs."""
+    await asyncio.wait_for(_keep_alive_once(), timeout=60)
+
+
 def _keep_alive_loop() -> None:
     """Run _keep_alive_once() on a fixed interval. Runs in a daemon thread."""
     interval = KEEP_ALIVE_INTERVAL_MINUTES * 60
     while True:
         time.sleep(interval)
         try:
-            asyncio.run(_keep_alive_once())
+            asyncio.run(_keep_alive_with_timeout())
         except Exception as e:
             log.error("Keep-alive failed: %s", e)
             notify_slack(
