@@ -20,7 +20,11 @@
 - Auth profiles: `~/.openclaw/agents/main/agent/auth-profiles.json`
 - Auth config: `~/.openclaw/agents/main/agent/auth.json`
 - Primary model: `anthropic/claude-sonnet-4-6`
-- Fallback model: `google-gemini/gemini-2.5-pro`
+- Fallback model: `google/gemini-2.5-pro`
+
+## References
+
+- OpenClaw docs: https://docs.openclaw.ai/
 
 ## Workflow Preferences
 

@@ -15,7 +15,7 @@ Config templates and scripts for running OpenClaw on a Raspberry Pi 5.
 - Gateway: loopback only (`127.0.0.1:18789`)
 - Channel: Telegram (live)
 - Primary model: `anthropic/claude-sonnet-4-6`
-- Fallback model: `google-gemini/gemini-2.5-pro`
+- Fallback model: `google/gemini-2.5-pro`
 
 ## OpenClaw Config (on Pi)
 
@@ -23,6 +23,10 @@ Config templates and scripts for running OpenClaw on a Raspberry Pi 5.
 - Auth profiles: `~/.openclaw/agents/main/agent/auth-profiles.json`
 - Auth config: `~/.openclaw/agents/main/agent/auth.json`
 - Workspace configs: `~/.openclaw/workspaces/` (SOUL.md, HEARTBEAT.md, TOOLS.md, USER.md)
+
+## References
+
+- OpenClaw docs: https://docs.openclaw.ai/
 
 ## Workflow Preferences
 
