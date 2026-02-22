@@ -148,7 +148,7 @@ Once connected, run these to get your Pi up to date:
 sudo apt update && sudo apt full-upgrade -y
 
 # Set timezone
-sudo timedatectl set-timezone America/New_York   # adjust to your timezone
+sudo timedatectl set-timezone America/Los_Angeles   # adjust to your timezone
 
 # Set hostname (optional)
 sudo hostnamectl set-hostname mypi
