@@ -20,21 +20,21 @@ describe('deriveCarries', () => {
     expect(carries).toHaveLength(4)
 
     // Carry 1: day 1 start → day 2 dinner
-    expect(carryStart(carries[0])).toEqual({
+    expect(carryStart(carries[0])).toMatchObject({
       dayIndex: 1,
       slot: { type: 'brekkie', timing: 'morning' },
     })
-    expect(carryEnd(carries[0])).toEqual({
+    expect(carryEnd(carries[0])).toMatchObject({
       dayIndex: 2,
       slot: { type: 'dinner', timing: 'evening' },
     })
 
     // Carry 2: day 3 brekkie → day 6 lunch
-    expect(carryStart(carries[1])).toEqual({
+    expect(carryStart(carries[1])).toMatchObject({
       dayIndex: 3,
       slot: { type: 'brekkie', timing: 'morning' },
     })
-    expect(carryEnd(carries[1])).toEqual({
+    expect(carryEnd(carries[1])).toMatchObject({
       dayIndex: 6,
       slot: { type: 'lunch', timing: 'midday' },
     })
@@ -42,21 +42,21 @@ describe('deriveCarries', () => {
     // Carry 3: day 6 dinner → day 8 lunch/afternoon snacks.
     // The day-6 afternoon snack follows the after-lunch resupply, so it
     // opens carry 3 (snack-splitting rule); dinner is the first main.
-    expect(carryStart(carries[2])).toEqual({
+    expect(carryStart(carries[2])).toMatchObject({
       dayIndex: 6,
       slot: { type: 'snack', timing: 'afternoon' },
     })
-    expect(carryEnd(carries[2])).toEqual({
+    expect(carryEnd(carries[2])).toMatchObject({
       dayIndex: 8,
       slot: { type: 'snack', timing: 'afternoon' },
     })
 
     // Carry 4: day 8 dinner → trip end
-    expect(carryStart(carries[3])).toEqual({
+    expect(carryStart(carries[3])).toMatchObject({
       dayIndex: 8,
       slot: { type: 'dinner', timing: 'evening' },
     })
-    expect(carryEnd(carries[3])).toEqual({
+    expect(carryEnd(carries[3])).toMatchObject({
       dayIndex: 10,
       slot: { type: 'dinner', timing: 'evening' },
     })

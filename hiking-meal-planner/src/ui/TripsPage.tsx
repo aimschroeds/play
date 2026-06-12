@@ -14,6 +14,7 @@ import {
 } from '../domain/trip'
 import type { Day, DayType, Person, Resupply, ResupplyTiming, Trip } from '../domain/types'
 import { fmtCalories, fmtSlot } from './format'
+import { PlanSection } from './PlanSection'
 import { VegBadge } from './VegBadge'
 
 const DAY_TYPES: DayType[] = ['small', 'average', 'big', 'huge']
@@ -110,6 +111,7 @@ export function TripsPage() {
 }
 
 function TripDetail({ trip, onBack }: { trip: Trip; onBack: () => void }) {
+  const [view, setView] = useState<'setup' | 'plan'>('setup')
   const people = useLiveQuery(
     () => db.people.where('id').anyOf(trip.peopleIds).toArray(),
     [trip.peopleIds.join()],
@@ -131,24 +133,47 @@ function TripDetail({ trip, onBack }: { trip: Trip; onBack: () => void }) {
           ← trips
         </button>
         <h2 className="text-xl font-bold text-gray-800">{trip.name}</h2>
-        <label className="ml-auto flex items-center gap-2 text-sm text-gray-600">
-          days
-          <input
-            className="w-16 rounded border border-gray-300 px-2 py-1"
-            inputMode="numeric"
-            value={trip.days.length}
-            onChange={(e) => {
-              const n = Number(e.target.value)
-              if (Number.isInteger(n) && n >= 1 && n <= 60) void update(withDayCount(trip, n))
-            }}
-          />
-        </label>
+        <nav className="flex gap-2">
+          {(['setup', 'plan'] as const).map((v) => (
+            <button
+              key={v}
+              onClick={() => setView(v)}
+              className={
+                v === view
+                  ? 'rounded bg-emerald-700 px-3 py-1 text-sm font-medium text-white'
+                  : 'rounded border border-gray-300 px-3 py-1 text-sm text-gray-600'
+              }
+            >
+              {v}
+            </button>
+          ))}
+        </nav>
+        {view === 'setup' && (
+          <label className="ml-auto flex items-center gap-2 text-sm text-gray-600">
+            days
+            <input
+              className="w-16 rounded border border-gray-300 px-2 py-1"
+              inputMode="numeric"
+              value={trip.days.length}
+              onChange={(e) => {
+                const n = Number(e.target.value)
+                if (Number.isInteger(n) && n >= 1 && n <= 60) void update(withDayCount(trip, n))
+              }}
+            />
+          </label>
+        )}
       </div>
 
-      <PeopleSection trip={trip} people={people} />
-      <FactorsSection trip={trip} onUpdate={update} />
-      <ResuppliesSection trip={trip} />
-      <CarriesSection trip={trip} />
+      {view === 'setup' ? (
+        <>
+          <PeopleSection trip={trip} people={people} />
+          <FactorsSection trip={trip} onUpdate={update} />
+          <ResuppliesSection trip={trip} />
+          <CarriesSection trip={trip} />
+        </>
+      ) : (
+        <PlanSection trip={trip} people={people} />
+      )}
 
       <section className="rounded-lg border border-gray-200 bg-white p-4">
         <h3 className="mb-2 font-semibold text-gray-800">Days</h3>
