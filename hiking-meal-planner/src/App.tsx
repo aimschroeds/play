@@ -1,12 +1,13 @@
 import { useState } from 'react'
 import { ItemsPage } from './ui/ItemsPage'
 import { MealsPage } from './ui/MealsPage'
+import { TripsPage } from './ui/TripsPage'
 
-const TABS = ['Items', 'Meals'] as const
+const TABS = ['Trips', 'Items', 'Meals'] as const
 type Tab = (typeof TABS)[number]
 
 function App() {
-  const [tab, setTab] = useState<Tab>('Items')
+  const [tab, setTab] = useState<Tab>('Trips')
 
   return (
     <div className="min-h-screen bg-gray-50">
@@ -31,7 +32,9 @@ function App() {
         </div>
       </header>
       <main className="mx-auto max-w-4xl px-6 py-6">
-        {tab === 'Items' ? <ItemsPage /> : <MealsPage />}
+        {tab === 'Trips' && <TripsPage />}
+        {tab === 'Items' && <ItemsPage />}
+        {tab === 'Meals' && <MealsPage />}
       </main>
     </div>
   )
