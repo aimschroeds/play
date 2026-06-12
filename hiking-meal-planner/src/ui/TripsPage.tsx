@@ -2,6 +2,7 @@ import { useState } from 'react'
 import { useLiveQuery } from 'dexie-react-hooks'
 import { db } from '../store/db'
 import { addPersonToTrip, createTrip, deleteTrip, removePersonFromTrip } from '../store/repos'
+import { carryEnd, carryStart, deriveCarries, type SlotRef } from '../domain/carries'
 import { scaledDailyTarget } from '../domain/density'
 import {
   hasMainSlot,
@@ -11,12 +12,19 @@ import {
   withSnackCount,
   type MainMealType,
 } from '../domain/trip'
-import type { Day, DayType, Person, Trip } from '../domain/types'
-import { fmtCalories } from './format'
+import type { Day, DayType, Person, Resupply, ResupplyTiming, Trip } from '../domain/types'
+import { fmtCalories, fmtSlot } from './format'
 import { VegBadge } from './VegBadge'
 
 const DAY_TYPES: DayType[] = ['small', 'average', 'big', 'huge']
 const MAINS: MainMealType[] = ['brekkie', 'lunch', 'dinner']
+
+const RESUPPLY_TIMINGS: { value: ResupplyTiming; label: string }[] = [
+  { value: 'before_breakfast', label: 'before brekkie' },
+  { value: 'after_lunch', label: 'after lunch' },
+  { value: 'late_afternoon', label: 'late afternoon' },
+  { value: 'after_dinner', label: 'after dinner' },
+]
 
 export function TripsPage() {
   const trips = useLiveQuery(() => db.trips.toArray(), [], [] as Trip[])
@@ -139,6 +147,8 @@ function TripDetail({ trip, onBack }: { trip: Trip; onBack: () => void }) {
 
       <PeopleSection trip={trip} people={people} />
       <FactorsSection trip={trip} onUpdate={update} />
+      <ResuppliesSection trip={trip} />
+      <CarriesSection trip={trip} />
 
       <section className="rounded-lg border border-gray-200 bg-white p-4">
         <h3 className="mb-2 font-semibold text-gray-800">Days</h3>
@@ -293,6 +303,141 @@ function PeopleSection({ trip, people }: { trip: Trip; people: Person[] }) {
           Add person
         </button>
       </form>
+    </section>
+  )
+}
+
+function ResuppliesSection({ trip }: { trip: Trip }) {
+  const resupplies = useLiveQuery(
+    () => db.resupplies.where('tripId').equals(trip.id).sortBy('dayIndex'),
+    [trip.id],
+    [] as Resupply[],
+  )
+  const [dayIndex, setDayIndex] = useState('1')
+  const [timing, setTiming] = useState<ResupplyTiming>('before_breakfast')
+
+  const day = Number(dayIndex)
+  const canAdd = Number.isInteger(day) && day >= 1 && day <= trip.days.length
+
+  const timingLabel = (t: ResupplyTiming) =>
+    RESUPPLY_TIMINGS.find((rt) => rt.value === t)?.label ?? t
+
+  return (
+    <section className="rounded-lg border border-gray-200 bg-white p-4">
+      <h3 className="mb-2 font-semibold text-gray-800">Resupplies</h3>
+      {resupplies.length > 0 && (
+        <ul className="mb-3 space-y-1">
+          {resupplies.map((r) => (
+            <li key={r.id} className="flex items-center gap-3 text-sm">
+              <span>
+                Day {r.dayIndex}, {timingLabel(r.timing)}
+              </span>
+              <button
+                className="text-red-700 underline"
+                onClick={() => void db.resupplies.delete(r.id)}
+              >
+                remove
+              </button>
+            </li>
+          ))}
+        </ul>
+      )}
+      <form
+        className="flex flex-wrap items-end gap-3"
+        onSubmit={(e) => {
+          e.preventDefault()
+          void db.resupplies.add({
+            id: crypto.randomUUID(),
+            tripId: trip.id,
+            dayIndex: day,
+            timing,
+          })
+        }}
+      >
+        <label className="block">
+          <span className="block text-sm text-gray-600">Day</span>
+          <input
+            className="mt-1 w-16 rounded border border-gray-300 px-2 py-1"
+            inputMode="numeric"
+            value={dayIndex}
+            onChange={(e) => setDayIndex(e.target.value)}
+          />
+        </label>
+        <label className="block">
+          <span className="block text-sm text-gray-600">Timing</span>
+          <select
+            className="mt-1 rounded border border-gray-300 px-2 py-1"
+            value={timing}
+            onChange={(e) => setTiming(e.target.value as ResupplyTiming)}
+          >
+            {RESUPPLY_TIMINGS.map((t) => (
+              <option key={t.value} value={t.value}>
+                {t.label}
+              </option>
+            ))}
+          </select>
+        </label>
+        <button
+          type="submit"
+          disabled={!canAdd}
+          className="rounded bg-emerald-700 px-3 py-1.5 text-sm font-medium text-white disabled:opacity-40"
+        >
+          Add resupply
+        </button>
+      </form>
+    </section>
+  )
+}
+
+const SLOT_ABBREV: Record<string, string> = {
+  brekkie: 'B',
+  snack: 'S',
+  lunch: 'L',
+  dinner: 'D',
+}
+
+function CarriesSection({ trip }: { trip: Trip }) {
+  const resupplies = useLiveQuery(
+    () => db.resupplies.where('tripId').equals(trip.id).toArray(),
+    [trip.id],
+    [] as Resupply[],
+  )
+  const carries = deriveCarries(trip, resupplies)
+
+  const fmtRef = (ref: SlotRef) => `day ${ref.dayIndex} ${fmtSlot(ref.slot)}`
+
+  return (
+    <section className="rounded-lg border border-gray-200 bg-white p-4">
+      <h3 className="mb-2 font-semibold text-gray-800">Carries</h3>
+      <p className="mb-3 text-xs text-gray-500">
+        Derived from resupplies — every slot belongs to exactly one carry. Check the
+        boundaries before packing.
+      </p>
+      <ul className="space-y-3">
+        {carries.map((carry) => {
+          const byDay = new Map<number, string[]>()
+          for (const { dayIndex, slot } of carry.slots) {
+            byDay.set(dayIndex, [...(byDay.get(dayIndex) ?? []), SLOT_ABBREV[slot.type]])
+          }
+          return (
+            <li key={carry.index} className="text-sm">
+              <span className="font-medium">Carry {carry.index}:</span>{' '}
+              {fmtRef(carryStart(carry))} → {fmtRef(carryEnd(carry))}
+              <span className="text-gray-500"> · {carry.slots.length} slots</span>
+              <div className="mt-1 flex flex-wrap gap-1">
+                {[...byDay.entries()].map(([dayIndex, abbrevs]) => (
+                  <span
+                    key={dayIndex}
+                    className="rounded bg-emerald-50 px-1.5 py-0.5 text-xs text-emerald-900"
+                  >
+                    d{dayIndex}: {abbrevs.join(' ')}
+                  </span>
+                ))}
+              </div>
+            </li>
+          )
+        })}
+      </ul>
     </section>
   )
 }

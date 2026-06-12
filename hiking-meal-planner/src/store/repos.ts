@@ -45,12 +45,13 @@ export async function createTrip(name: string, numDays: number): Promise<string>
 }
 
 /** People belong to exactly one trip (plans are fully individual, story 5.3),
- *  so deleting a trip deletes its people. */
+ *  so deleting a trip deletes its people and resupplies. */
 export async function deleteTrip(id: string): Promise<void> {
-  await db.transaction('rw', db.trips, db.people, async () => {
+  await db.transaction('rw', db.trips, db.people, db.resupplies, async () => {
     const trip = await db.trips.get(id)
     if (!trip) return
     await db.people.bulkDelete(trip.peopleIds)
+    await db.resupplies.where('tripId').equals(id).delete()
     await db.trips.delete(id)
   })
 }
