@@ -3,6 +3,7 @@ import { useLiveQuery } from 'dexie-react-hooks'
 import { db } from '../store/db'
 import { clearPlanEntry, setPlanEntry } from '../store/repos'
 import { carryEnd, carryStart, deriveCarries, keyedSlots, type KeyedSlot } from '../domain/carries'
+import { generateDayPlan } from '../domain/generate'
 import { rollUpMeal } from '../domain/rollups'
 import {
   carryTotals,
@@ -70,6 +71,34 @@ export function PlanSection({ trip, people }: { trip: Trip; people: Person[] }) 
     perCarry.map((c) => c.perPerson.get(person.id) ?? { weightG: 0, calories: 0, density: 0 }),
   )
 
+  // Generation fills unlocked, on-trail slots around manual picks; tapping
+  // again regenerates with fresh randomness (stories 8.1-8.3).
+  async function generateForDay(day: Day) {
+    const dayEntries = allEntries.filter(
+      (e) => e.personId === person.id && e.dayIndex === day.index,
+    )
+    const generated = generateDayPlan({
+      trip,
+      day,
+      person,
+      meals,
+      itemsById,
+      existingEntries: dayEntries,
+      rng: Math.random,
+    })
+    const generatedKeys = new Set(generated.map((e) => e.slotKey))
+    for (const e of dayEntries) {
+      if (e.kind === 'meal' && !e.locked && !generatedKeys.has(e.slotKey)) {
+        await clearPlanEntry(trip.id, person.id, day.index, e.slotKey)
+      }
+    }
+    for (const e of generated) await setPlanEntry(e)
+  }
+
+  async function generateAll() {
+    for (const day of trip.days) await generateForDay(day)
+  }
+
   // Export scoped to what this trip's plan actually uses (story 4.10).
   function exportUsed() {
     const usedMealIds = new Set(
@@ -84,9 +113,9 @@ export function PlanSection({ trip, people }: { trip: Trip; people: Person[] }) 
 
   return (
     <div className="space-y-6">
-      {people.length > 1 && (
-        <div className="flex gap-2">
-          {people.map((p) => (
+      <div className="flex items-center gap-2">
+        {people.length > 1 &&
+          people.map((p) => (
             <button
               key={p.id}
               onClick={() => setPersonId(p.id)}
@@ -99,8 +128,15 @@ export function PlanSection({ trip, people }: { trip: Trip; people: Person[] }) 
               {p.name}
             </button>
           ))}
-        </div>
-      )}
+        <button
+          className="ml-auto rounded border border-emerald-700 px-3 py-1 text-sm font-medium text-emerald-800 disabled:opacity-40"
+          disabled={meals.length === 0}
+          onClick={() => void generateAll()}
+          title="Fill unlocked slots on every day; locked picks and off-trail slots are kept"
+        >
+          ✨ generate all days
+        </button>
+      </div>
 
       <div className="space-y-4">
         {trip.days.map((day) => (
@@ -113,6 +149,7 @@ export function PlanSection({ trip, people }: { trip: Trip; people: Person[] }) 
             meals={meals}
             mealsById={mealsById}
             itemsById={itemsById}
+            onGenerate={() => void generateForDay(day)}
           />
         ))}
       </div>
@@ -191,6 +228,7 @@ function DayCard({
   meals,
   mealsById,
   itemsById,
+  onGenerate,
 }: {
   trip: Trip
   day: Day
@@ -199,6 +237,7 @@ function DayCard({
   meals: Meal[]
   mealsById: ReadonlyMap<string, Meal>
   itemsById: ReadonlyMap<string, Item>
+  onGenerate: () => void
 }) {
   const slots = keyedSlots(day)
   const dayEntries = slots
@@ -230,6 +269,14 @@ function DayCard({
           {totals.delta >= 0 ? '+' : ''}
           {Math.round(totals.deltaPct * 100)}%) · {fmtGrams(totals.weightG)}
         </span>
+        <button
+          className="rounded border border-emerald-700 px-2 py-0.5 text-xs font-medium text-emerald-800 disabled:opacity-40"
+          disabled={meals.length === 0}
+          onClick={onGenerate}
+          title="Fill unlocked slots; tap again to regenerate"
+        >
+          ✨ generate
+        </button>
       </div>
       <div className="grid gap-2 sm:grid-cols-2">
         {slots.map((keyed) => (
@@ -345,7 +392,23 @@ function SlotCell({
         <span className="shrink-0 text-xs tabular-nums text-gray-500">
           {fmtCalories(detail.calories)}
           {detail.weightG > 0 && ` · ${fmtGrams(detail.weightG)}`}
+          {entry?.quantityScale != null && entry.quantityScale !== 1 && (
+            <span className="text-amber-700"> ×{entry.quantityScale}</span>
+          )}
         </span>
+      )}
+      {entry?.kind === 'meal' && (
+        <label
+          className="flex shrink-0 items-center gap-0.5 text-xs text-gray-500"
+          title="Locked picks survive generation"
+        >
+          <input
+            type="checkbox"
+            checked={entry.locked ?? false}
+            onChange={(e) => void setPlanEntry({ ...entry, locked: e.target.checked })}
+          />
+          lock
+        </label>
       )}
     </div>
   )
