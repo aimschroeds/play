@@ -1,9 +1,18 @@
 import { useState } from 'react'
 import { useLiveQuery } from 'dexie-react-hooks'
 import { db } from '../store/db'
-import { deleteMeal } from '../store/repos'
+import { commitMealImport, deleteMeal, MealInUseError } from '../store/repos'
 import { rollUpMeal } from '../domain/rollups'
+import { itemsToCsv, type CsvIssue, type DuplicateResolution } from '../domain/csv/items'
+import {
+  mealsToCsv,
+  parseMealsCsv,
+  planMealImport,
+  type MissingItemPolicy,
+  type ParsedMealGroup,
+} from '../domain/csv/meals'
 import type { Item, Meal, MealType } from '../domain/types'
+import { downloadCsv } from './download'
 import { fmtCalories, fmtDensity, fmtGrams } from './format'
 import { VegBadge } from './VegBadge'
 
@@ -43,6 +52,16 @@ export function MealsPage() {
   const [typeFilter, setTypeFilter] = useState<MealType | 'all'>('all')
   const [vegOnly, setVegOnly] = useState(false)
   const [sortKey, setSortKey] = useState<SortKey>('name')
+  const [error, setError] = useState<string | null>(null)
+
+  async function remove(id: string) {
+    try {
+      await deleteMeal(id)
+      setError(null)
+    } catch (e) {
+      setError(e instanceof MealInUseError ? `Cannot delete: ${e.message}` : String(e))
+    }
+  }
 
   const itemsById = new Map(items.map((i) => [i.id, i]))
   const previewMeal = draftToMeal(draft, 'preview')
@@ -238,6 +257,14 @@ export function MealsPage() {
         </label>
       </div>
 
+      {error && (
+        <p className="rounded border border-red-200 bg-red-50 p-2 text-sm text-red-800">
+          {error}
+        </p>
+      )}
+
+      <MealsImportExport items={items} meals={meals} />
+
       {rows.length === 0 ? (
         <p className="text-sm text-gray-500">No meals match.</p>
       ) : (
@@ -283,7 +310,7 @@ export function MealsPage() {
                   </button>
                   <button
                     className="text-red-700 underline"
-                    onClick={() => void deleteMeal(meal.id)}
+                    onClick={() => void remove(meal.id)}
                   >
                     delete
                   </button>
@@ -294,5 +321,133 @@ export function MealsPage() {
         </table>
       )}
     </div>
+  )
+}
+
+function MealsImportExport({ items, meals }: { items: Item[]; meals: Meal[] }) {
+  const [parsed, setParsed] = useState<{ groups: ParsedMealGroup[]; issues: CsvIssue[] } | null>(
+    null,
+  )
+  const [duplicates, setDuplicates] = useState<DuplicateResolution>('skip')
+  const [missingItems, setMissingItems] = useState<MissingItemPolicy>('fail')
+  const [includeItems, setIncludeItems] = useState(true)
+  const plan = parsed ? planMealImport(parsed.groups, items, meals, { duplicates, missingItems }) : null
+
+  function exportMeals() {
+    const itemsById = new Map(items.map((i) => [i.id, i]))
+    downloadCsv('meals.csv', mealsToCsv(meals, itemsById))
+    if (includeItems) {
+      const usedIds = new Set(meals.flatMap((m) => m.components.map((c) => c.itemId)))
+      downloadCsv('items.csv', itemsToCsv(items.filter((i) => usedIds.has(i.id))))
+    }
+  }
+
+  return (
+    <details className="rounded-lg border border-gray-200 bg-white p-4">
+      <summary className="cursor-pointer text-sm font-semibold text-gray-800">
+        Import / export CSV
+      </summary>
+      <div className="mt-3 space-y-3 text-sm">
+        <div className="flex flex-wrap items-center gap-3">
+          <input
+            type="file"
+            accept=".csv,text/csv"
+            onChange={(e) => {
+              const file = e.target.files?.[0]
+              if (file) void file.text().then((text) => setParsed(parseMealsCsv(text)))
+              e.target.value = ''
+            }}
+          />
+          <button
+            className="text-emerald-700 underline disabled:text-gray-400"
+            disabled={meals.length === 0}
+            onClick={exportMeals}
+          >
+            export {meals.length} meals
+          </button>
+          <label className="flex items-center gap-1">
+            <input
+              type="checkbox"
+              checked={includeItems}
+              onChange={(e) => setIncludeItems(e.target.checked)}
+            />
+            include referenced items
+          </label>
+        </div>
+        <p className="text-xs text-gray-500">
+          One row per meal–item pair: meal_name, meal_type, item_name, quantity_g. Weight,
+          calories, and vegetarian are computed from items, never imported.
+        </p>
+        {parsed && plan && (
+          <div className="space-y-2 rounded border border-gray-200 bg-gray-50 p-3">
+            <p>
+              <span className="font-medium">{plan.creates.length}</span> meals to create,{' '}
+              <span className="font-medium">{plan.updates.length}</span> to update,{' '}
+              <span className="font-medium">{plan.skipped.length}</span> skipped,{' '}
+              <span className="font-medium">{plan.stubs.length}</span> stub items,{' '}
+              <span className="font-medium">{plan.failed.length}</span> failed,{' '}
+              <span className="font-medium">{parsed.issues.length}</span> bad rows
+            </p>
+            <div className="flex flex-wrap gap-4">
+              <label className="flex items-center gap-2">
+                duplicates:
+                <select
+                  className="rounded border border-gray-300 px-1 py-0.5"
+                  value={duplicates}
+                  onChange={(e) => setDuplicates(e.target.value as DuplicateResolution)}
+                >
+                  <option value="skip">skip</option>
+                  <option value="update">update existing</option>
+                  <option value="copy">import as copy</option>
+                </select>
+              </label>
+              <label className="flex items-center gap-2">
+                missing items:
+                <select
+                  className="rounded border border-gray-300 px-1 py-0.5"
+                  value={missingItems}
+                  onChange={(e) => setMissingItems(e.target.value as MissingItemPolicy)}
+                >
+                  <option value="fail">fail those meals</option>
+                  <option value="stub">create stub items</option>
+                </select>
+              </label>
+            </div>
+            {plan.failed.length > 0 && (
+              <ul className="list-inside list-disc text-xs text-red-700">
+                {plan.failed.map((f) => (
+                  <li key={f.name}>
+                    {f.name}: missing {f.missingItems.join(', ')}
+                  </li>
+                ))}
+              </ul>
+            )}
+            {parsed.issues.length > 0 && (
+              <ul className="list-inside list-disc text-xs text-red-700">
+                {parsed.issues.map((issue) => (
+                  <li key={issue.line}>
+                    line {issue.line}: {issue.reason}
+                  </li>
+                ))}
+              </ul>
+            )}
+            <div className="flex gap-3">
+              <button
+                className="rounded bg-emerald-700 px-3 py-1 font-medium text-white disabled:opacity-40"
+                disabled={plan.creates.length === 0 && plan.updates.length === 0}
+                onClick={() => {
+                  void commitMealImport(plan).then(() => setParsed(null))
+                }}
+              >
+                Import
+              </button>
+              <button className="text-gray-500 underline" onClick={() => setParsed(null)}>
+                cancel
+              </button>
+            </div>
+          </div>
+        )}
+      </div>
+    </details>
   )
 }

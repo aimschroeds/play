@@ -3,8 +3,11 @@
 // dependents reported so the user can untangle them first.
 
 import { db } from './db'
+import { calorieDensity } from '../domain/density'
 import { makeTrip } from '../domain/trip'
-import type { Item, Meal, Person, PlanEntry } from '../domain/types'
+import type { ItemFields, ItemImportPlan } from '../domain/csv/items'
+import type { MealFields, MealImportPlan } from '../domain/csv/meals'
+import type { Item, Meal, MealComponent, Person, PlanEntry } from '../domain/types'
 
 export class ItemInUseError extends Error {
   readonly item: Item
@@ -79,6 +82,68 @@ export async function clearPlanEntry(
   slotKey: string,
 ): Promise<void> {
   await db.planEntries.delete(planEntryId(tripId, personId, dayIndex, slotKey))
+}
+
+function itemFromFields(fields: ItemFields, existing?: Item): Item {
+  return {
+    id: existing?.id ?? crypto.randomUUID(),
+    name: fields.name,
+    caloriesPerGram: calorieDensity({ weightG: fields.weightG, calories: fields.calories }),
+    vegetarian: fields.vegetarian,
+    // CSV doesn't carry the basis; the raw values round-trip regardless.
+    inputBasis: existing?.inputBasis ?? 'per_serving',
+    inputWeightG: fields.weightG,
+    inputCalories: fields.calories,
+  }
+}
+
+export async function commitItemImport(plan: ItemImportPlan): Promise<void> {
+  await db.transaction('rw', db.items, async () => {
+    await db.items.bulkAdd(plan.creates.map((fields) => itemFromFields(fields)))
+    await db.items.bulkPut(plan.updates.map(({ item, fields }) => itemFromFields(fields, item)))
+  })
+}
+
+/** Stub items (story 4.9) are zero-calorie, non-vegetarian placeholders:
+ *  meals containing them stay out of vegetarian suggestions until the
+ *  user fills them in. */
+function stubItem(name: string): Item {
+  return {
+    id: crypto.randomUUID(),
+    name,
+    caloriesPerGram: 0,
+    vegetarian: false,
+    inputBasis: 'per_gram',
+    inputWeightG: 1,
+    inputCalories: 0,
+  }
+}
+
+export async function commitMealImport(plan: MealImportPlan): Promise<void> {
+  await db.transaction('rw', db.items, db.meals, async () => {
+    await db.items.bulkAdd(plan.stubs.map(stubItem))
+    const itemsByName = new Map((await db.items.toArray()).map((i) => [i.name.toLowerCase(), i]))
+    const resolve = (fields: MealFields): MealComponent[] =>
+      fields.components.flatMap((c) => {
+        const item = itemsByName.get(c.itemName.toLowerCase())
+        return item ? [{ itemId: item.id, grams: c.grams }] : []
+      })
+    await db.meals.bulkAdd(
+      plan.creates.map((fields) => ({
+        id: crypto.randomUUID(),
+        name: fields.name,
+        type: fields.type,
+        components: resolve(fields),
+      })),
+    )
+    await db.meals.bulkPut(
+      plan.updates.map(({ meal, fields }) => ({
+        ...meal,
+        type: fields.type,
+        components: resolve(fields),
+      })),
+    )
+  })
 }
 
 export async function createTrip(name: string, numDays: number): Promise<string> {
