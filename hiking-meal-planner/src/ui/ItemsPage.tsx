@@ -1,9 +1,18 @@
 import { useState } from 'react'
 import { useLiveQuery } from 'dexie-react-hooks'
 import { db } from '../store/db'
-import { deleteItem, ItemInUseError } from '../store/repos'
+import { commitItemImport, deleteItem, ItemInUseError } from '../store/repos'
 import { calorieDensity } from '../domain/density'
+import {
+  itemsToCsv,
+  parseItemsCsv,
+  planItemImport,
+  type CsvIssue,
+  type DuplicateResolution,
+  type ParsedItemRow,
+} from '../domain/csv/items'
 import type { InputBasis, Item } from '../domain/types'
+import { downloadCsv } from './download'
 import { fmtDensity } from './format'
 import { VegBadge } from './VegBadge'
 
@@ -215,6 +224,8 @@ export function ItemsPage() {
         </label>
       </div>
 
+      <ItemsImportExport items={items} />
+
       {visible.length === 0 ? (
         <p className="text-sm text-gray-500">No items yet — add your first above.</p>
       ) : (
@@ -261,5 +272,88 @@ export function ItemsPage() {
         </table>
       )}
     </div>
+  )
+}
+
+function ItemsImportExport({ items }: { items: Item[] }) {
+  const [parsed, setParsed] = useState<{ rows: ParsedItemRow[]; issues: CsvIssue[] } | null>(null)
+  const [resolution, setResolution] = useState<DuplicateResolution>('skip')
+  const plan = parsed ? planItemImport(parsed.rows, items, resolution) : null
+
+  return (
+    <details className="rounded-lg border border-gray-200 bg-white p-4">
+      <summary className="cursor-pointer text-sm font-semibold text-gray-800">
+        Import / export CSV
+      </summary>
+      <div className="mt-3 space-y-3 text-sm">
+        <div className="flex flex-wrap items-center gap-3">
+          <input
+            type="file"
+            accept=".csv,text/csv"
+            onChange={(e) => {
+              const file = e.target.files?.[0]
+              if (file) void file.text().then((text) => setParsed(parseItemsCsv(text)))
+              e.target.value = ''
+            }}
+          />
+          <button
+            className="text-emerald-700 underline disabled:text-gray-400"
+            disabled={items.length === 0}
+            onClick={() => downloadCsv('items.csv', itemsToCsv(items))}
+          >
+            export {items.length} items
+          </button>
+        </div>
+        <p className="text-xs text-gray-500">
+          Columns: name, weight_g, calories, vegetarian — weight/calories on any consistent
+          basis.
+        </p>
+        {parsed && plan && (
+          <div className="space-y-2 rounded border border-gray-200 bg-gray-50 p-3">
+            <p>
+              <span className="font-medium">{plan.creates.length}</span> to create,{' '}
+              <span className="font-medium">{plan.updates.length}</span> to update,{' '}
+              <span className="font-medium">{plan.skipped.length}</span> skipped,{' '}
+              <span className="font-medium">{parsed.issues.length}</span> bad rows
+            </p>
+            <label className="flex items-center gap-2">
+              duplicates:
+              <select
+                className="rounded border border-gray-300 px-1 py-0.5"
+                value={resolution}
+                onChange={(e) => setResolution(e.target.value as DuplicateResolution)}
+              >
+                <option value="skip">skip</option>
+                <option value="update">update existing</option>
+                <option value="copy">import as copy</option>
+              </select>
+            </label>
+            {parsed.issues.length > 0 && (
+              <ul className="list-inside list-disc text-xs text-red-700">
+                {parsed.issues.map((issue) => (
+                  <li key={issue.line}>
+                    line {issue.line}: {issue.reason}
+                  </li>
+                ))}
+              </ul>
+            )}
+            <div className="flex gap-3">
+              <button
+                className="rounded bg-emerald-700 px-3 py-1 font-medium text-white disabled:opacity-40"
+                disabled={plan.creates.length === 0 && plan.updates.length === 0}
+                onClick={() => {
+                  void commitItemImport(plan).then(() => setParsed(null))
+                }}
+              >
+                Import
+              </button>
+              <button className="text-gray-500 underline" onClick={() => setParsed(null)}>
+                cancel
+              </button>
+            </div>
+          </div>
+        )}
+      </div>
+    </details>
   )
 }

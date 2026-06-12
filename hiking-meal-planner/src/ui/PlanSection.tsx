@@ -12,7 +12,10 @@ import {
   planKey,
   type DayStatus,
 } from '../domain/totals'
+import { itemsToCsv } from '../domain/csv/items'
+import { mealsToCsv } from '../domain/csv/meals'
 import type { Day, Item, Meal, Person, PlanEntry, Resupply, Trip } from '../domain/types'
+import { downloadCsv } from './download'
 import { fmtCalories, fmtDensity, fmtGrams, fmtSlot } from './format'
 
 const OFF_TRAIL = '@offtrail'
@@ -67,6 +70,18 @@ export function PlanSection({ trip, people }: { trip: Trip; people: Person[] }) 
     perCarry.map((c) => c.perPerson.get(person.id) ?? { weightG: 0, calories: 0, density: 0 }),
   )
 
+  // Export scoped to what this trip's plan actually uses (story 4.10).
+  function exportUsed() {
+    const usedMealIds = new Set(
+      allEntries.filter((e) => e.kind === 'meal' && e.mealId).map((e) => e.mealId!),
+    )
+    const usedMeals = meals.filter((m) => usedMealIds.has(m.id))
+    const usedItemIds = new Set(usedMeals.flatMap((m) => m.components.map((c) => c.itemId)))
+    const slug = trip.name.toLowerCase().replace(/[^a-z0-9]+/g, '-')
+    downloadCsv(`${slug}-meals.csv`, mealsToCsv(usedMeals, itemsById))
+    downloadCsv(`${slug}-items.csv`, itemsToCsv(items.filter((i) => usedItemIds.has(i.id))))
+  }
+
   return (
     <div className="space-y-6">
       {people.length > 1 && (
@@ -103,7 +118,16 @@ export function PlanSection({ trip, people }: { trip: Trip; people: Person[] }) 
       </div>
 
       <section className="rounded-lg border border-gray-200 bg-white p-4">
-        <h3 className="mb-2 font-semibold text-gray-800">Carries</h3>
+        <div className="mb-2 flex items-center">
+          <h3 className="font-semibold text-gray-800">Carries</h3>
+          <button
+            className="ml-auto text-sm text-emerald-700 underline disabled:text-gray-400"
+            disabled={allEntries.length === 0}
+            onClick={exportUsed}
+          >
+            export this trip's meals + items CSV
+          </button>
+        </div>
         <table className="w-full border-collapse text-sm">
           <thead>
             <tr className="border-b border-gray-300 text-left text-gray-600">
