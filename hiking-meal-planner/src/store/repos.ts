@@ -4,7 +4,7 @@
 
 import { db } from './db'
 import { makeTrip } from '../domain/trip'
-import type { Item, Meal, Person } from '../domain/types'
+import type { Item, Meal, Person, PlanEntry } from '../domain/types'
 
 export class ItemInUseError extends Error {
   readonly item: Item
@@ -33,9 +33,52 @@ export async function deleteItem(id: string): Promise<void> {
   })
 }
 
+export class MealInUseError extends Error {
+  readonly meal: Meal
+  readonly entryCount: number
+
+  constructor(meal: Meal, entryCount: number) {
+    super(
+      `"${meal.name}" is planned in ${entryCount} slot${entryCount === 1 ? '' : 's'} — ` +
+        'remove it from plans first',
+    )
+    this.name = 'MealInUseError'
+    this.meal = meal
+    this.entryCount = entryCount
+  }
+}
+
 export async function deleteMeal(id: string): Promise<void> {
-  // Will also need an in-use check against plan entries once plans exist (M4).
-  await db.meals.delete(id)
+  await db.transaction('rw', db.meals, db.planEntries, async () => {
+    const meal = await db.meals.get(id)
+    if (!meal) return
+    const entryCount = await db.planEntries.where('mealId').equals(id).count()
+    if (entryCount > 0) throw new MealInUseError(meal, entryCount)
+    await db.meals.delete(id)
+  })
+}
+
+function planEntryId(tripId: string, personId: string, dayIndex: number, slotKey: string) {
+  return `${tripId}|${personId}|${dayIndex}|${slotKey}`
+}
+
+/** Upsert the assignment for one slot; pass null fields via clearPlanEntry. */
+export async function setPlanEntry(
+  fields: Omit<PlanEntry, 'id'>,
+): Promise<void> {
+  await db.planEntries.put({
+    ...fields,
+    id: planEntryId(fields.tripId, fields.personId, fields.dayIndex, fields.slotKey),
+  })
+}
+
+export async function clearPlanEntry(
+  tripId: string,
+  personId: string,
+  dayIndex: number,
+  slotKey: string,
+): Promise<void> {
+  await db.planEntries.delete(planEntryId(tripId, personId, dayIndex, slotKey))
 }
 
 export async function createTrip(name: string, numDays: number): Promise<string> {
@@ -45,13 +88,14 @@ export async function createTrip(name: string, numDays: number): Promise<string>
 }
 
 /** People belong to exactly one trip (plans are fully individual, story 5.3),
- *  so deleting a trip deletes its people and resupplies. */
+ *  so deleting a trip deletes its people, resupplies, and plan entries. */
 export async function deleteTrip(id: string): Promise<void> {
-  await db.transaction('rw', db.trips, db.people, db.resupplies, async () => {
+  await db.transaction('rw', db.trips, db.people, db.resupplies, db.planEntries, async () => {
     const trip = await db.trips.get(id)
     if (!trip) return
     await db.people.bulkDelete(trip.peopleIds)
     await db.resupplies.where('tripId').equals(id).delete()
+    await db.planEntries.where('tripId').equals(id).delete()
     await db.trips.delete(id)
   })
 }
@@ -71,7 +115,7 @@ export async function addPersonToTrip(
 }
 
 export async function removePersonFromTrip(tripId: string, personId: string): Promise<void> {
-  await db.transaction('rw', db.trips, db.people, async () => {
+  await db.transaction('rw', db.trips, db.people, db.planEntries, async () => {
     const trip = await db.trips.get(tripId)
     if (trip) {
       await db.trips.put({
@@ -79,6 +123,7 @@ export async function removePersonFromTrip(tripId: string, personId: string): Pr
         peopleIds: trip.peopleIds.filter((id) => id !== personId),
       })
     }
+    await db.planEntries.where('[tripId+personId]').equals([tripId, personId]).delete()
     await db.people.delete(personId)
   })
 }

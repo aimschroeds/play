@@ -1,5 +1,5 @@
 import Dexie, { type EntityTable } from 'dexie'
-import type { Item, Meal, Person, Resupply, Trip } from '../domain/types'
+import type { Item, Meal, Person, PlanEntry, Resupply, Trip } from '../domain/types'
 
 // Dexie versioned schema — bump version() and add an upgrade() when the
 // shape changes. Only indexed fields are listed in stores().
@@ -9,6 +9,7 @@ export const db = new Dexie('hiking-meal-planner') as Dexie & {
   items: EntityTable<Item, 'id'>
   meals: EntityTable<Meal, 'id'>
   resupplies: EntityTable<Resupply, 'id'>
+  planEntries: EntityTable<PlanEntry, 'id'>
 }
 
 db.version(1).stores({
@@ -20,4 +21,8 @@ db.version(1).stores({
 
 db.version(2).stores({
   resupplies: 'id, tripId',
+})
+
+db.version(3).stores({
+  planEntries: 'id, tripId, [tripId+personId], mealId',
 })

@@ -81,6 +81,29 @@ export interface Meal {
   components: MealComponent[]
 }
 
+/** One person's assignment for one meal slot on one day (stories 5.1-5.3,
+ *  6.1-6.2). Plans are fully individual per person. */
+export interface PlanEntry {
+  /** Deterministic: `${tripId}|${personId}|${dayIndex}|${slotKey}` so a
+   *  slot has at most one entry and put() is a natural upsert. */
+  id: string
+  tripId: string
+  personId: string
+  dayIndex: number
+  /** Stable key from keyedSlots() identifying the slot within the day. */
+  slotKey: string
+  kind: 'meal' | 'offTrail'
+  /** Set when kind === 'meal'. */
+  mealId?: string
+  /** Off-trail calorie estimate; omitted = "partially estimated" day,
+   *  never counted as under target (resolved decision, story 6.2). */
+  offTrailCalories?: number
+  /** Multiplier on the meal's quantities (generation fine-tuning, M6). */
+  quantityScale?: number
+  /** Locked manual picks survive plan generation (story 8.2). */
+  locked?: boolean
+}
+
 /** Defaults per story 2.2; user-tunable per trip. */
 export const DEFAULT_DAY_TYPE_FACTORS: Record<DayType, number> = {
   small: 0.75,

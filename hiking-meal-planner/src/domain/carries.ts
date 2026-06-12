@@ -8,11 +8,13 @@
 // an after-lunch resupply stay in the old carry, afternoon snacks go to
 // the new one.
 
-import type { Resupply, ResupplyTiming, Slot, SlotTiming, Trip } from './types'
+import type { Day, Resupply, ResupplyTiming, Slot, SlotTiming, Trip } from './types'
 
 export interface SlotRef {
   dayIndex: number
   slot: Slot
+  /** Stable key from keyedSlots(), used to join with PlanEntry.slotKey. */
+  key: string
 }
 
 export interface Carry {
@@ -36,6 +38,26 @@ export function slotPosition(slot: Slot): number {
   return TIMING_ORDER[slot.timing] * 10 + (slot.type === 'snack' ? 1 : 0)
 }
 
+export interface KeyedSlot {
+  slot: Slot
+  key: string
+}
+
+/** A day's active slots in chronological order, each with a stable key:
+ *  `type:timing`, suffixed with an occurrence number for duplicates
+ *  (e.g. a fourth snack repeats a timing). PlanEntries reference slots
+ *  by this key. */
+export function keyedSlots(day: Day): KeyedSlot[] {
+  const sorted = [...day.activeSlots].sort((a, b) => slotPosition(a) - slotPosition(b))
+  const seen = new Map<string, number>()
+  return sorted.map((slot) => {
+    const base = `${slot.type}:${slot.timing}`
+    const n = seen.get(base) ?? 0
+    seen.set(base, n + 1)
+    return { slot, key: n === 0 ? base : `${base}:${n}` }
+  })
+}
+
 /** Position within the day at which the new carry starts. */
 const CUT_POSITIONS: Record<ResupplyTiming, number> = {
   before_breakfast: 0,
@@ -52,14 +74,13 @@ export function deriveCarries(trip: Trip, resupplies: Resupply[]): Carry[] {
   const buckets: SlotRef[][] = Array.from({ length: cuts.length + 1 }, () => [])
   const days = [...trip.days].sort((a, b) => a.index - b.index)
   for (const day of days) {
-    const slots = [...day.activeSlots].sort((a, b) => slotPosition(a) - slotPosition(b))
-    for (const slot of slots) {
+    for (const { slot, key } of keyedSlots(day)) {
       const cutsPassed = cuts.filter(
         (c) =>
           c.dayIndex < day.index ||
           (c.dayIndex === day.index && slotPosition(slot) >= c.position),
       ).length
-      buckets[cutsPassed].push({ dayIndex: day.index, slot })
+      buckets[cutsPassed].push({ dayIndex: day.index, slot, key })
     }
   }
 
