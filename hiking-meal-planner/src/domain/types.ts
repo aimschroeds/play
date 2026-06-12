@@ -51,6 +51,7 @@ export interface Trip {
 }
 
 export interface Resupply {
+  id: string
   tripId: string
   dayIndex: number
   timing: ResupplyTiming
